@@ -1,13 +1,14 @@
 # ctxengine — context engine for LLM agents
 
-The part of an agent that decides what the model sees. Given a stream of
-messages and a token budget, it keeps the transcript, assembles each request,
-evicts stale tool results, and summarises older history into a rolling summary
-when the window fills — with the whole conversation kept on disk and
-searchable.
+This modile is the part of an AI assistant, or agent, that decides what the
+model sees. Given a stream of messages and a token budget, it keeps the transcript,
+assembles each request, evicts stale tool results, and summarises older history
+into a rolling summary when the window fills. 
 
-Extracted from [ClawEh](https://github.com/PivotLLM/ClawEh), where it was
-designed, hardened against production logs and first shipped.
+It also keeps the whole conversation on disk and searchable.
+
+This engine was originally written for [ClawEh](https://github.com/PivotLLM/ClawEh)
+and subsquently separated into it's own clearly-defined module.
 
 ## What it owns
 
@@ -59,7 +60,7 @@ sessions. Truncation deletes window rows; nothing is logically skipped.
 
 ### Migrating from the JSONL layout
 
-Earlier versions kept the window in `<key>.jsonl` and the state in
+Earlier versions of ClawEh kept the window in `<key>.jsonl` and the state in
 `<key>.meta.json` beside the archive. `session.MigrateJSONL(dir)` folds every
 such pair into its `<key>.archive.db` and renames the sources to
 `*.jsonl.migrated` / `*.meta.json.migrated`, which can be deleted once the
@@ -86,7 +87,7 @@ own: the archive imports it into `summaries` the first time it is opened.
   }
   ```
 
-  The host owns which model answers, credentials, transport, retries on
+  The host owns model selection, credentials, transport, retries on
   transport errors and cooldowns, and honours `Exclude`. The engine owns its
   output: it classifies refusals, remembers refusing models per session, and
   calls again with a longer `Exclude`. The same shape serves
@@ -112,8 +113,21 @@ own: the archive imports it into `summaries` the first time it is opened.
 - Give the tools a `Host` (sessions directory and the compact, clear and
   info closures) if the model should be able to reach the archive.
 
+
 ## Copyright and license
 
 Copyright (c) 2026 Tenebris Technologies Inc.
 
 This software is licensed under the MIT License. Please see LICENSE for details.
+
+## Trademarks
+
+Any trademarks referenced are the property of their respective owners, used for identification only, and do not imply sponsorship, endorsement, or affiliation.
+
+## No Warranty
+
+**(zilch, none, void, nil, null, "", {}, 0x00, 0b00000000, EOF)**
+
+THIS SOFTWARE IS PROVIDED “AS IS,” WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Made in Canada with internationally sourced components.
