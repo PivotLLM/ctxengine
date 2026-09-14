@@ -397,10 +397,16 @@ func (m *Manager) handleSafetyNetPostLoop(
 
 	// Still at or above safety threshold — drop oldest groups, then apply large
 	// message checks, then persist. Order: group-drop -> applyLargeMsgChecks ->
-	// persistStoredResult -> compute finalPct.
+	// persistStoredResult -> compute finalPct. When no model succeeded the
+	// summary in the store is the stale one and stays as it is: it is not
+	// handed to persist, which would checkpoint it a second time.
+	var newSummary *Summary
+	if llmSucceeded {
+		newSummary = latestSummary
+	}
 	currentStored = m.dropOldestStoredGroups(ctx, currentStored)
 	m.applyLargeMsgChecksStored(currentStored)
-	if err := m.persistStoredResult(sysMsg, currentStored, latestSummary); err != nil {
+	if err := m.persistStoredResult(sysMsg, currentStored, newSummary); err != nil {
 		return err
 	}
 
@@ -967,6 +973,11 @@ func mergeSeqRanges(ranges []SeqRange) []SeqRange {
 // persistStoredResult writes the compressed history and summary to the store and saves.
 // It returns ErrCompressionFailed if Save() fails.
 // After a successful save it persists compaction state if the store supports it.
+// persistStoredResult writes the retained window back to the store and, when
+// summary is a summary this pass generated, makes it the session's current
+// summary and appends it to the archive's checkpoint log. A nil summary leaves
+// the current summary, its checkpoint log and its provenance fields untouched
+// (a drop-only pass, or a pass that fell back to the stale summary).
 func (m *Manager) persistStoredResult(sysMsg *memory.StoredMessage, conv []memory.StoredMessage, summary *Summary) error {
 	// Collapse repeated cron no-op runs in the retained tail before persisting,
 	// so the live context window the LLM keeps seeing carries one counted anchor
@@ -1041,8 +1052,10 @@ func (m *Manager) persistStoredResult(sysMsg *memory.StoredMessage, conv []memor
 		st.CompressedAtMeaningfulCount = m.msgCount
 		st.Cooling = m.cooling
 		st.CoolingSinceCount = m.coolingSinceCount
-		st.SummaryGeneratedAt = summaryGeneratedAt
-		st.SummaryModel = summaryModel
+		if summary != nil {
+			st.SummaryGeneratedAt = summaryGeneratedAt
+			st.SummaryModel = summaryModel
+		}
 	})
 
 	return nil

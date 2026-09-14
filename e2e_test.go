@@ -1687,3 +1687,80 @@ func TestE2E_HostSettingsSurviveCompactionCloseAndReset(t *testing.T) {
 		t.Errorf("Stats().MeaningfulMessages after Reset = %d, want 0", got)
 	}
 }
+
+// TestE2E_StaleSummaryIsNotCheckpointedAgain runs a safety-net pass in which
+// every model fails after an earlier compaction has produced a summary. The
+// pass falls back to the stale summary and drops groups instead; the stored
+// summary, its provenance and the checkpoint log must all be exactly what
+// the successful pass left. Regression: the fallback used to append the stale
+// summary to the checkpoint log again on every such pass.
+func TestE2E_StaleSummaryIsNotCheckpointedAgain(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	seedParallelGroupHistory(t, dir)
+
+	sum := &e2eSummarizer{model: "e2e-model"}
+	store := e2eStore(t, dir)
+	defer store.Close()
+	mgr := New(e2eKey, store, tightOpts(dir, sum)...).(*Manager)
+	defer mgr.Close(ctx)
+
+	if _, err := mgr.Assemble(ctx, e2eRequest()); err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	db := e2eDB(t, dir)
+	if n := queryInt(t, db, "SELECT count(*) FROM summaries"); n != 1 {
+		t.Fatalf("summaries rows after the successful pass = %d, want 1", n)
+	}
+	summaryBefore := store.GetSummary(e2eKey)
+	stateBefore, err := store.GetCompactionState(e2eKey)
+	if err != nil {
+		t.Fatalf("GetCompactionState: %v", err)
+	}
+	if summaryBefore == "" || stateBefore.SummaryModel != "e2e-model" {
+		t.Fatalf("no summary recorded by the successful pass: summary=%q model=%q", summaryBefore, stateBefore.SummaryModel)
+	}
+
+	// Every model fails from here on. Push the window past the safety line
+	// with two 600-token messages and a small one after them, so the drop
+	// path can get back under the line by dropping the oldest of the three
+	// (retainMinMessages keeps the last two).
+	sum.fail = true
+	requestsBefore := len(sum.requests)
+	if _, err := mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: strings.Repeat("q", 2400)}); err != nil {
+		t.Fatalf("AddUserMessage: %v", err)
+	}
+	if _, err := mgr.AddAssistantMessage(ctx, spawnllm.Message{Role: "assistant", Content: strings.Repeat("a", 2400)}); err != nil {
+		t.Fatalf("AddAssistantMessage: %v", err)
+	}
+	if _, err := mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: pad("and now?", 40)}); err != nil {
+		t.Fatalf("AddUserMessage: %v", err)
+	}
+	// The adds themselves trigger passes (the last one runs the safety net
+	// and gets under the line by dropping); Assemble then finds nothing left
+	// to do. Either way every pass asked the models and every model failed.
+	if _, err := mgr.Assemble(ctx, e2eRequest()); err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if len(sum.requests) == requestsBefore {
+		t.Fatal("no compaction pass asked the models")
+	}
+	window := store.GetHistory(e2eKey)
+	if len(window) >= 6 || mgr.contextPercent(window) >= 80 {
+		t.Fatalf("drop path did not run: %d messages at %.0f%%", len(window), mgr.contextPercent(window))
+	}
+	if n := queryInt(t, db, "SELECT count(*) FROM summaries"); n != 1 {
+		t.Errorf("summaries rows after the failed passes = %d, want still 1", n)
+	}
+	if got := store.GetSummary(e2eKey); got != summaryBefore {
+		t.Errorf("stored summary changed by the failed pass")
+	}
+	stateAfter, err := store.GetCompactionState(e2eKey)
+	if err != nil {
+		t.Fatalf("GetCompactionState: %v", err)
+	}
+	if stateAfter.SummaryModel != stateBefore.SummaryModel || !stateAfter.SummaryGeneratedAt.Equal(stateBefore.SummaryGeneratedAt) {
+		t.Errorf("summary provenance changed by the failed pass: %q %v -> %q %v",
+			stateBefore.SummaryModel, stateBefore.SummaryGeneratedAt, stateAfter.SummaryModel, stateAfter.SummaryGeneratedAt)
+	}
+}
