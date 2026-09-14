@@ -25,6 +25,16 @@ func newPersistentMockStore() *persistentMockStore {
 	}
 }
 
+// AddFullMessage advances the meaningful count the way a real compaction-state
+// store does: the store owns the count and the manager reads it back.
+func (s *persistentMockStore) AddFullMessage(sessionKey string, msg spawnllm.Message) int64 {
+	seq := s.mockStore.AddFullMessage(sessionKey, msg)
+	st := s.states[sessionKey]
+	st.MeaningfulCount++
+	s.states[sessionKey] = st
+	return seq
+}
+
 func (s *persistentMockStore) GetCompactionState(sessionKey string) (memory.CompactionState, error) {
 	return s.states[sessionKey], nil
 }
@@ -58,6 +68,9 @@ func TestCompactionState_PersistedAndRestoredOnRestart(t *testing.T) {
 		WithRetainMinMessages(2),
 		WithModelCaller(llm),
 	).(*Manager)
+	// The store owns the meaningful count; seed it the way a real store would
+	// have after len(history) non-noise messages, and let the manager read it.
+	store.states[sessionKey] = memory.CompactionState{MeaningfulCount: len(history)}
 	mgr1.msgCount = len(history)
 
 	// Run compression to produce persisted state.

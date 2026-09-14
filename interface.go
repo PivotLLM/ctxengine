@@ -89,6 +89,13 @@ func (a Assembly) Changed() bool { return len(a.Evictions) > 0 || a.Compacted }
 // call, Add* what the model and the tools produced, repeat. Each Add returns
 // the transcript seq the message was stored under, which is the number the
 // rest of the system (summaries, session tools, memory evidence) cites.
+//
+// An implementation is safe for concurrent use: it serialises its own
+// operations, so a session can be driven from more than one goroutine (a turn
+// in flight and a session tool arriving over another transport, say). A
+// compaction holds that serialisation for the length of its model call, and
+// the host services it calls out to (the model caller, the notify and
+// reporter callbacks) must not call back into the same manager.
 type ContextManager interface {
 	// AddUserMessage appends a user message and runs the turn-boundary
 	// compaction check.

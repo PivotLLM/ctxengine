@@ -1034,35 +1034,28 @@ func (m *Manager) persistStoredResult(sysMsg *memory.StoredMessage, conv []memor
 		return fmt.Errorf("%w: save: %s", ErrCompressionFailed, err.Error())
 	}
 
-	// 9d. Persist compaction state if the store supports it.
-	// Use m.msgCount for CompressedAtMeaningfulCount because the defer in doCompress
-	// sets m.compressedAtCount = m.msgCount after this call returns.
-	if cs, ok := m.store.(CompactionStateStore); ok {
-		state := memory.CompactionState{
-			MeaningfulCount:             m.msgCount,
-			CompressedAtMeaningfulCount: m.msgCount,
-			Cooling:                     m.cooling,
-			CoolingSinceCount:           m.coolingSinceCount,
-			SummaryGeneratedAt:          summaryGeneratedAt,
-			SummaryModel:                summaryModel,
-		}
-		if setErr := cs.SetCompactionState(m.sessionKey, state); setErr != nil {
-			logger.WarnCF("llmcontext", "compression: failed to persist compaction state", map[string]any{
-				"session_key": m.sessionKey,
-				"error":       setErr.Error(),
-			})
-		}
-	}
+	// 9d. Persist the compaction state the manager owns. CompressedAtMeaningfulCount
+	// is the current count because the defer in doCompress sets
+	// m.compressedAtCount = m.msgCount after this call returns.
+	m.updateCompactionState("compression", func(st *memory.CompactionState) {
+		st.CompressedAtMeaningfulCount = m.msgCount
+		st.Cooling = m.cooling
+		st.CoolingSinceCount = m.coolingSinceCount
+		st.SummaryGeneratedAt = summaryGeneratedAt
+		st.SummaryModel = summaryModel
+	})
 
 	return nil
 }
 
 // dropOldestStoredGroups removes the oldest turn groups (seq-preserving) from
-// conv until the estimated token count drops below safetyPercent or conv reaches
-// retainMinMessages.
+// conv until the estimated token count drops below safetyPercent or conv
+// reaches retainMinMessages. A group is an assistant tool-call turn with the
+// results that answer it, or a single message otherwise; groups are dropped
+// whole so no result is left behind without its call. The newest group is
+// never dropped: it is the turn in progress.
 func (m *Manager) dropOldestStoredGroups(_ context.Context, conv []memory.StoredMessage) []memory.StoredMessage {
 	for len(conv) > m.cfg.retainMinMessages {
-
 		plain := storedToPlain(conv)
 		tokens := m.estTokens(plain)
 		pct := 0.0
@@ -1073,14 +1066,20 @@ func (m *Manager) dropOldestStoredGroups(_ context.Context, conv []memory.Stored
 			break
 		}
 
-		groupEnd := resolveGroup(plain, 0).end
+		span := 1
+		if plain[0].Role == "assistant" && len(plain[0].ToolCalls) > 0 {
+			span = collectToolGroup(plain).span
+		}
+		if span >= len(conv) {
+			break // the only group left is the current turn
+		}
 		logger.WarnCF("llmcontext", "safety-net: dropping oldest turn group", map[string]any{
 			"session_key": m.sessionKey,
-			"group_end":   groupEnd,
+			"group_end":   span - 1,
 			"tokens":      tokens,
 			"pct":         pct,
 		})
-		conv = conv[groupEnd+1:]
+		conv = conv[span:]
 	}
 	return conv
 }

@@ -392,7 +392,7 @@ func (m *Manager) evictionBudgetBytes() int {
 	return int(float64(m.cfg.contextWindow) * cpt * 0.40)
 }
 
-// SweepEvictions runs the per-turn eviction pass over the live window. It is
+// sweepEvictions runs the per-turn eviction pass over the live window. It is
 // LLM-free, idempotent, and rewrites the stored history in place (preserving
 // seqs) so the saving persists across turns. It returns the evictions performed
 // (newest content first is not guaranteed; order follows history position) for
@@ -400,7 +400,7 @@ func (m *Manager) evictionBudgetBytes() int {
 //
 // Best-effort: on an empty window or a disabled policy it returns nil and makes
 // no changes.
-func (m *Manager) SweepEvictions(_ context.Context) []EvictionEvent {
+func (m *Manager) sweepEvictions(_ context.Context) []EvictionEvent {
 	p := m.cfg.eviction
 	if !p.Enabled {
 		return nil
@@ -658,4 +658,13 @@ func (m *Manager) SweepEvictions(_ context.Context) []EvictionEvent {
 		})
 	}
 	return events
+}
+
+// SweepEvictions runs the eviction pass on its own. Assemble runs the same
+// pass; this remains for callers and tests that drive the primitives one at a
+// time.
+func (m *Manager) SweepEvictions(ctx context.Context) []EvictionEvent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sweepEvictions(ctx)
 }

@@ -22,6 +22,11 @@ import (
 // composed from the Layers the host passes on every Assemble; the manager owns
 // the rendered summary, the history and the injections.
 type Manager struct {
+	// mu serialises every public operation: one Add, Assemble, Compact, Reset
+	// or read at a time per session. Held across compaction, model call
+	// included, so a concurrent Add or Assemble waits for the pass to finish.
+	mu sync.Mutex
+
 	sessionKey string
 	store      session.SessionStore
 	cfg        managerConfig
@@ -220,10 +225,55 @@ func (m *Manager) noiseKey() NoiseKeyFunc {
 	return noNoiseKey
 }
 
+// noteAdded advances the meaningful-message count after a store write. A
+// store that keeps compaction state owns the count, since it is the one that
+// decides what is noise (a repeated scheduled fire, an identical reply), so
+// the manager reads the count back instead of counting every message itself.
+// A store without compaction state counts every message.
+func (m *Manager) noteAdded() {
+	if cs, ok := m.store.(CompactionStateStore); ok {
+		if st, err := cs.GetCompactionState(m.sessionKey); err == nil {
+			m.msgCount = st.MeaningfulCount
+			return
+		}
+	}
+	m.msgCount++
+}
+
+// updateCompactionState rewrites the durable compaction-state fields the
+// manager owns and leaves the rest of the record as it is: the meaningful
+// count the store keeps, and the host's per-session settings that share the
+// record (active model index, reasoning and tool-activity toggles). A store
+// without compaction state is a no-op. op names the caller for the log.
+func (m *Manager) updateCompactionState(op string, apply func(st *memory.CompactionState)) {
+	cs, ok := m.store.(CompactionStateStore)
+	if !ok {
+		return
+	}
+	st, err := cs.GetCompactionState(m.sessionKey)
+	if err != nil {
+		logger.WarnCF("llmcontext", op+": failed to load compaction state", map[string]any{
+			"session_key": m.sessionKey,
+			"error":       err.Error(),
+		})
+		return
+	}
+	apply(&st)
+	if err := cs.SetCompactionState(m.sessionKey, st); err != nil {
+		logger.WarnCF("llmcontext", op+": failed to persist compaction state", map[string]any{
+			"session_key": m.sessionKey,
+			"error":       err.Error(),
+		})
+	}
+}
+
 func (m *Manager) AddUserMessage(ctx context.Context, msg spawnllm.Message) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	seq := m.store.AddFullMessage(m.sessionKey, msg)
 	m.archiveAppend(seq, msg)
-	m.msgCount++
+	m.noteAdded()
 	if err := m.triggerCheck(ctx); err != nil {
 		// Automatic triggers log and continue — do not block the LLM call.
 		logger.WarnCF("llmcontext", "compression error on AddUserMessage (continuing)", map[string]any{
@@ -235,9 +285,12 @@ func (m *Manager) AddUserMessage(ctx context.Context, msg spawnllm.Message) (int
 }
 
 func (m *Manager) AddAssistantMessage(ctx context.Context, msg spawnllm.Message) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	seq := m.store.AddFullMessage(m.sessionKey, msg)
 	m.archiveAppend(seq, msg)
-	m.msgCount++
+	m.noteAdded()
 	if err := m.triggerCheck(ctx); err != nil {
 		// Automatic triggers log and continue — do not block the LLM call.
 		logger.WarnCF("llmcontext", "compression error on AddAssistantMessage (continuing)", map[string]any{
@@ -249,25 +302,31 @@ func (m *Manager) AddAssistantMessage(ctx context.Context, msg spawnllm.Message)
 }
 
 // AddToolCallMessage records the assistant turn containing tool calls.
-// Writes to session store and archive. Increments msgCount.
+// Writes to session store and archive and advances the message count.
 // Does NOT trigger a compression check — compression is deferred to the next
 // Assemble so that the check runs once per dispatch rather than after every
 // tool-call message.
 func (m *Manager) AddToolCallMessage(_ context.Context, msg spawnllm.Message) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	seq := m.store.AddFullMessage(m.sessionKey, msg)
 	m.archiveAppend(seq, msg)
-	m.msgCount++
+	m.noteAdded()
 	return seq, nil
 }
 
 // AddToolResult records a tool result message.
-// Writes to session store and archive. Increments msgCount.
+// Writes to session store and archive and advances the message count.
 // Does NOT trigger a compression check — compression is deferred to the next
 // Assemble.
 func (m *Manager) AddToolResult(_ context.Context, msg spawnllm.Message) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	seq := m.store.AddFullMessage(m.sessionKey, msg)
 	m.archiveAppend(seq, msg)
-	m.msgCount++
+	m.noteAdded()
 	return seq, nil
 }
 
@@ -283,11 +342,14 @@ func (m *Manager) AddToolResult(_ context.Context, msg spawnllm.Message) (int64,
 // not. When the first one compacts, the second is skipped for this call: the
 // pass just ran against the same window and would only report nothing to do.
 func (m *Manager) Assemble(ctx context.Context, req AssembleRequest) (Assembly, error) {
-	m.SetToolDefinitionTokens(req.ToolDefinitionTokens)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.setToolDefinitionTokens(req.ToolDefinitionTokens)
 	if req.Channel != "" {
 		m.lastChannel, m.lastChatID = req.Channel, req.ChatID
 	}
-	out := Assembly{Evictions: m.SweepEvictions(ctx)}
+	out := Assembly{Evictions: m.sweepEvictions(ctx)}
 
 	if m.emergencyCompactOnHistory(ctx) {
 		out.Compacted = true
@@ -355,10 +417,13 @@ func (m *Manager) emergencyCompactOnBuilt(ctx context.Context, built []spawnllm.
 // current unchanged. Assemble runs the same check; this remains for callers
 // and tests that drive the primitives one at a time.
 func (m *Manager) PreDispatchCheck(ctx context.Context, current []spawnllm.Message) ([]spawnllm.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if !m.emergencyCompactOnHistory(ctx) {
 		return current, nil
 	}
-	built, err := m.Build(ctx)
+	built, err := m.build(AssembleRequest{})
 	if err != nil {
 		return current, err
 	}
@@ -369,10 +434,13 @@ func (m *Manager) PreDispatchCheck(ctx context.Context, current []spawnllm.Messa
 // built slice plus reserve and tool schemas is past the safety line and returns
 // a fresh build, else built unchanged. Assemble runs the same check.
 func (m *Manager) CheckAndCompress(ctx context.Context, built []spawnllm.Message) ([]spawnllm.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if !m.emergencyCompactOnBuilt(ctx, built) {
 		return built, nil
 	}
-	fresh, err := m.Build(ctx)
+	fresh, err := m.build(AssembleRequest{})
 	if err != nil {
 		return built, err
 	}
@@ -458,7 +526,7 @@ func EstimateToolDefinitionTokens(defs []spawnllm.ToolDefinition) int {
 // accompanying each request. The agent loop calls this once per turn; the
 // Manager has no other way to learn it, and 46 tool definitions are worth tens
 // of thousands of tokens. Negative values are ignored.
-func (m *Manager) SetToolDefinitionTokens(n int) {
+func (m *Manager) setToolDefinitionTokens(n int) {
 	if n < 0 {
 		return
 	}
@@ -915,6 +983,9 @@ func (m *Manager) noteAgeTriggerBoundary() {
 // SetTestCompressHook sets a hook function that is called whenever compress()
 // fires. Only for use in tests.
 func (m *Manager) SetTestCompressHook(fn func(safetyNet bool)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	m.compressHook = fn
 }
 
@@ -922,6 +993,8 @@ func (m *Manager) SetTestCompressHook(fn func(safetyNet bool)) {
 // per-dispatch entry point; Build remains for callers and tests that want the
 // bare slice (summary block, if any, plus the sanitised history).
 func (m *Manager) Build(_ context.Context) ([]spawnllm.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.build(AssembleRequest{})
 }
 
@@ -1056,6 +1129,9 @@ func attachRoutedMemory(msgs []spawnllm.Message, routed string) {
 // successful manual compaction still resets the breaker so the automatic path
 // resumes.
 func (m *Manager) Compact(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	err := m.doCompress(ctx, false)
 	m.recordCompactionOutcome(err)
 	return err
@@ -1065,6 +1141,9 @@ func (m *Manager) Compact(ctx context.Context) error {
 // (the same block Build() injects into the system prompt), or "" when there is
 // no summary. Used by session_compact to show the agent what was just preserved.
 func (m *Manager) RenderedSummary() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	archiveMin, archiveMax := m.archiveWindow()
 	return renderSummaryFromRaw(m.store.GetSummary(m.sessionKey), archiveMin, archiveMax)
 }
@@ -1072,121 +1151,64 @@ func (m *Manager) RenderedSummary() string {
 // LastCompactionReport returns the report produced by the most recent
 // compaction pass, or nil if none has run on this manager.
 func (m *Manager) LastCompactionReport() *CompactionReport {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	return m.lastReport
 }
 
-// ForceCompress aggressively reduces context by performing a group-aware backward
-// walk: it keeps the most recent complete turn groups that fit within the context
-// window, always preserving the current in-progress turn group (the last group in
-// history). If the current turn group alone exceeds the context window, it returns
-// ErrCompressionFailed with a descriptive message.
-//
-// A turn group is: a user message + optional assistant tool-call message + all
-// matching tool results (matched by ToolCallID). Groups are identified by
-// resolveGroup working backward from the last message.
-func (m *Manager) ForceCompress(_ context.Context) error {
-	history := m.store.GetHistory(m.sessionKey)
+// ForceCompress is the host's recovery when a provider rejects the request as
+// too large: it drops the oldest turn groups until the window is under the
+// safety line, without calling a model. The retained messages keep their
+// seqs, repeated scheduled fires collapse, and the existing summary stays as
+// it is. Returns ErrCompressionFailed when the retained window is still over
+// the line, which means the newest turn group alone does not fit.
+func (m *Manager) ForceCompress(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-	// Separate system message.
-	var sysMsg *spawnllm.Message
-	conversation := history
-	if len(history) > 0 && history[0].Role == "system" {
-		sys := history[0]
+	stored := m.store.GetHistoryWithSeqs(m.sessionKey)
+	var sysMsg *memory.StoredMessage
+	conv := stored
+	if len(stored) > 0 && stored[0].Role == "system" {
+		sys := stored[0]
 		sysMsg = &sys
-		conversation = history[1:]
+		conv = stored[1:]
 	}
-
-	if len(conversation) <= 2 {
+	if len(conv) == 0 || m.cfg.contextWindow <= 0 {
+		return nil
+	}
+	pct := func(c []memory.StoredMessage) float64 {
+		return float64(m.estTokens(storedToPlain(c))) * 100 / float64(m.cfg.contextWindow)
+	}
+	if pct(conv) < float64(m.cfg.safetyPercent) {
 		return nil
 	}
 
-	// Walk backward collecting complete turn groups, newest first.
-	type groupSpan struct{ start, end int }
-	var groups []groupSpan
-	i := len(conversation) - 1
-	for i >= 0 {
-		g := resolveGroup(conversation, i)
-		groups = append(groups, groupSpan(g))
-		i = g.start - 1
+	before := len(conv)
+	conv = m.dropOldestStoredGroups(ctx, conv)
+	m.applyLargeMsgChecksStored(conv)
+	if err := m.persistStoredResult(sysMsg, conv, nil); err != nil {
+		return fmt.Errorf("force compress: %w", err)
 	}
-	// groups[0] is the current (most recent) turn group.
-
-	if len(groups) == 0 {
-		return nil
-	}
-
-	// Check whether the current turn group alone fits the context window.
-	currentGroupSlice := conversation[groups[0].start : groups[0].end+1]
-	currentGroupTokens := m.estTokens(currentGroupSlice)
-	sysTokens := 0
-	if sysMsg != nil {
-		sysTokens = m.estTokens([]spawnllm.Message{*sysMsg})
-	}
-	if m.cfg.contextWindow > 0 && (currentGroupTokens+sysTokens)*100/m.cfg.contextWindow >= m.cfg.safetyPercent {
-		return fmt.Errorf("%w: current turn group (%d tokens) alone exceeds context window (%d tokens)",
-			ErrCompressionFailed, currentGroupTokens+sysTokens, m.cfg.contextWindow)
-	}
-
-	// Greedily add older groups until the window is full.
-	kept := []groupSpan{groups[0]}
-	totalTokens := currentGroupTokens + sysTokens
-	for _, g := range groups[1:] {
-		slice := conversation[g.start : g.end+1]
-		cost := m.estTokens(slice)
-		if m.cfg.contextWindow > 0 && (totalTokens+cost)*100/m.cfg.contextWindow >= m.cfg.safetyPercent {
-			break
-		}
-		kept = append(kept, g)
-		totalTokens += cost
-	}
-
-	// kept is newest-first; reverse to chronological order.
-	for lo, hi := 0, len(kept)-1; lo < hi; lo, hi = lo+1, hi-1 {
-		kept[lo], kept[hi] = kept[hi], kept[lo]
-	}
-
-	// Compute how many messages were dropped.
-	keptMsgCount := 0
-	for _, g := range kept {
-		keptMsgCount += g.end - g.start + 1
-	}
-	droppedCount := len(conversation) - keptMsgCount
-
-	// Build new history.
-	capacity := keptMsgCount
-	if sysMsg != nil {
-		capacity++
-	}
-	newHistory := make([]spawnllm.Message, 0, capacity)
-
-	if sysMsg != nil {
-		// Append compression note to the system prompt to avoid consecutive system messages.
-		compressionNote := fmt.Sprintf(
-			"\n\n[System Note: Emergency compression dropped %d oldest messages due to context limit]",
-			droppedCount,
-		)
-		enhanced := *sysMsg
-		enhanced.Content += compressionNote
-		newHistory = append(newHistory, enhanced)
-	}
-	for _, g := range kept {
-		newHistory = append(newHistory, conversation[g.start:g.end+1]...)
-	}
-
-	m.store.SetHistory(m.sessionKey, newHistory)
-	if err := m.store.Save(m.sessionKey); err != nil {
-		return fmt.Errorf("llmcontext: force compress save: %w", err)
-	}
+	m.compressedAtCount = m.msgCount
 
 	logger.WarnCF("llmcontext", "force compression executed", map[string]any{
 		"session_key":  m.sessionKey,
-		"dropped_msgs": droppedCount,
-		"new_count":    len(newHistory),
+		"dropped_msgs": before - len(conv),
+		"new_count":    len(conv),
 	})
+	if pct(conv) >= float64(m.cfg.safetyPercent) {
+		return fmt.Errorf("%w: current turn group alone exceeds context window (%d tokens)",
+			ErrCompressionFailed, m.cfg.contextWindow)
+	}
 	return nil
 }
 
 func (m *Manager) Stats() ContextStats {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	history := m.store.GetHistory(m.sessionKey)
 	tokens := m.estTokens(history)
 	pct := 0.0
@@ -1223,22 +1245,18 @@ func (m *Manager) Stats() ContextStats {
 //
 // Close is safe to call on a manager that has never opened an archive.
 func (m *Manager) Close(ctx context.Context) error {
-	// Flush compaction state to the durable store so a new manager created for
-	// the same session can restore counts and cooldown.
-	if cs, ok := m.store.(CompactionStateStore); ok {
-		state := memory.CompactionState{
-			MeaningfulCount:             m.msgCount,
-			CompressedAtMeaningfulCount: m.compressedAtCount,
-			Cooling:                     m.cooling,
-			CoolingSinceCount:           m.coolingSinceCount,
-			SummaryGeneratedAt:          m.lastCompressedAt,
-		}
-		if err := cs.SetCompactionState(m.sessionKey, state); err != nil {
-			logger.WarnCF("llmcontext", "Close: failed to persist compaction state", map[string]any{
-				"session_key": m.sessionKey,
-				"error":       err.Error(),
-			})
-		}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Flush the compaction state the manager owns so a new manager created
+	// for the same session restores the trigger window and cooldown.
+	m.updateCompactionState("Close", func(st *memory.CompactionState) {
+		st.CompressedAtMeaningfulCount = m.compressedAtCount
+		st.Cooling = m.cooling
+		st.CoolingSinceCount = m.coolingSinceCount
+		st.SummaryGeneratedAt = m.lastCompressedAt
+	})
+	if _, ok := m.store.(CompactionStateStore); ok {
 		if err := m.store.Save(m.sessionKey); err != nil {
 			logger.WarnCF("llmcontext", "Close: failed to save session", map[string]any{
 				"session_key": m.sessionKey,
@@ -1269,6 +1287,9 @@ func (m *Manager) Close(ctx context.Context) error {
 // session_summary_*. A hard wipe (erase long-term memory) is done by deleting the
 // per-session .archive.db file manually; there is no destructive clear.
 func (m *Manager) Reset(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	// 1. Clear in-memory compression state.
 	m.msgCount = 0
 	m.compressedAtCount = 0
@@ -1292,15 +1313,24 @@ func (m *Manager) Reset(ctx context.Context) error {
 	m.store.TruncateHistory(m.sessionKey, 0)
 	m.store.SetSummary(m.sessionKey, "")
 
-	// 4. If the store implements CompactionStateStore, write zeroed state back.
-	if cs, ok := m.store.(CompactionStateStore); ok {
-		if setErr := cs.SetCompactionState(m.sessionKey, memory.CompactionState{}); setErr != nil {
-			logger.WarnCF("llmcontext", "Reset: failed to persist compaction state", map[string]any{
-				"session_key": m.sessionKey,
-				"error":       setErr.Error(),
-			})
-		}
-	}
+	// 4. Zero the compaction counters in the durable state. The host's
+	// per-session settings in the same record survive a clear.
+	m.updateCompactionState("Reset", func(st *memory.CompactionState) {
+		st.MeaningfulCount = 0
+		st.CompressedAtMeaningfulCount = 0
+		st.Cooling = false
+		st.CoolingSinceCount = 0
+		st.SummaryGeneratedAt = time.Time{}
+		st.SummaryModel = ""
+	})
 
 	return m.store.Save(m.sessionKey)
+}
+
+// SetToolDefinitionTokens records the token cost of the tool schemas the host
+// sends with every request, so the built-request checks can account for it.
+func (m *Manager) SetToolDefinitionTokens(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.setToolDefinitionTokens(n)
 }

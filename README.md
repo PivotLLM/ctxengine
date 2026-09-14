@@ -114,6 +114,18 @@ own: the archive imports it into `summaries` the first time it is opened.
   info closures) if the model should be able to reach the archive.
 
 
+## Testing
+
+```
+make test    # the whole suite under the race detector; exits non-zero on any failure
+make check   # gofmt and go vet gates, then make test
+```
+
+The suite covers each part on its own and the engine as a whole: `e2e_test.go`
+drives conversations through the real SQLite store and archive, compacts them
+with a scripted model caller, reopens the session and reads it back through
+the session tools.
+
 ## Copyright and license
 
 Copyright (c) 2026 Tenebris Technologies Inc.

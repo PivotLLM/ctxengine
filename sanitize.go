@@ -8,142 +8,121 @@ import (
 	"github.com/PivotLLM/spawnllm"
 )
 
-// sanitizeHistoryForProvider drops the messages a strict provider would reject
-// from a stored history before it is sent: stale system messages, tool results
-// that answer no visible tool call, tool-call turns without a valid predecessor,
-// and tool-call turns whose results are incomplete.
+// sanitizeHistoryForProvider drops what a strict provider would reject from a
+// stored history before it is sent. The unit of validity is the tool group: an
+// assistant turn that makes tool calls, followed by the results that answer
+// them. A group is kept whole when every call is answered and the turn follows
+// a user or tool message; otherwise the turn and its results go together. A
+// result that answers no call in its group, or that sits outside any group, is
+// dropped on its own, and stored system messages are always dropped because
+// build composes the single system message itself.
+//
+// Compaction and eviction can leave any of these shapes behind (a boundary
+// that cuts a group in half, a collapsed turn whose results remain), and
+// tolerant providers accept them silently, so a history can be malformed for a
+// long time before a strict one answers 400 on every turn. Sanitising on every
+// dispatch means such a session recovers by itself.
 func sanitizeHistoryForProvider(history []spawnllm.Message) []spawnllm.Message {
 	if len(history) == 0 {
 		return history
 	}
 
-	// Drop reasons are counted and logged once at the end rather than per message,
-	// because a single post-compaction boundary can orphan several leading
-	// tool-call turns and would otherwise spam one DBG line each, every dispatch.
-	var dropSystem, dropLeadingTool, dropOrphanTool, dropAsstStart, dropAsstBadPred, dropIncompleteGroup int
-
-	sanitized := make([]spawnllm.Message, 0, len(history))
-	for _, msg := range history {
-		switch msg.Role {
-		case "system":
-			// Drop system messages from history. build always constructs
-			// its own single system message (layers + summary + injections);
-			// extra system messages would break providers that only accept
-			// one (Anthropic, Codex).
-			dropSystem++
-			continue
-
-		case "tool":
-			if len(sanitized) == 0 {
-				dropLeadingTool++
-				continue
+	var drops sanitizeDrops
+	out := make([]spawnllm.Message, 0, len(history))
+	for i := 0; i < len(history); {
+		msg := history[i]
+		switch {
+		case msg.Role == "system":
+			drops.system++
+			i++
+		case msg.Role == "tool":
+			// Not consumed by a group above, so nothing it could answer is
+			// visible to the provider.
+			drops.orphanResult++
+			i++
+		case msg.Role == "assistant" && len(msg.ToolCalls) > 0:
+			g := collectToolGroup(history[i:])
+			i += g.span
+			drops.strayResult += g.strays
+			switch {
+			case len(out) == 0 || (out[len(out)-1].Role != "user" && out[len(out)-1].Role != "tool"):
+				drops.badPredecessor++
+			case !g.complete:
+				drops.incompleteGroup++
+			default:
+				out = append(out, g.msgs...)
 			}
-			// Walk backwards to the nearest assistant message, skipping over any
-			// preceding tool results (the parallel-tool-call case), and require
-			// that THIS result answers one of the calls that assistant actually
-			// declared.
-			//
-			// Matching the id matters, not merely finding an assistant that made
-			// some call: a result whose id belongs to a dropped assistant turn
-			// would otherwise be accepted on the strength of an unrelated
-			// neighbour, and strict providers reject it — DeepSeek answers 400
-			// with "Messages with role 'tool' must be a response to a preceding
-			// message with 'tool_calls'", which kills every turn until the
-			// message ages out of the window.
-			open := map[string]bool{}
-			for i := len(sanitized) - 1; i >= 0; i-- {
-				if sanitized[i].Role == "tool" {
-					continue
-				}
-				if sanitized[i].Role == "assistant" {
-					for _, tc := range sanitized[i].ToolCalls {
-						open[tc.ID] = true
-					}
-				}
-				break
-			}
-			if !open[msg.ToolCallID] {
-				dropOrphanTool++
-				continue
-			}
-			sanitized = append(sanitized, msg)
-
-		case "assistant":
-			if len(msg.ToolCalls) > 0 {
-				if len(sanitized) == 0 {
-					dropAsstStart++
-					continue
-				}
-				prev := sanitized[len(sanitized)-1]
-				if prev.Role != "user" && prev.Role != "tool" {
-					dropAsstBadPred++
-					continue
-				}
-			}
-			sanitized = append(sanitized, msg)
-
 		default:
-			sanitized = append(sanitized, msg)
+			out = append(out, msg)
+			i++
 		}
 	}
 
-	// Second pass: ensure every assistant message with tool_calls has matching
-	// tool result messages following it. This is required by strict providers
-	// like DeepSeek that enforce: "An assistant message with 'tool_calls' must
-	// be followed by tool messages responding to each 'tool_call_id'."
-	final := make([]spawnllm.Message, 0, len(sanitized))
-	for i := 0; i < len(sanitized); i++ {
-		msg := sanitized[i]
-		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
-			// Collect expected tool_call IDs
-			expected := make(map[string]bool, len(msg.ToolCalls))
-			for _, tc := range msg.ToolCalls {
-				expected[tc.ID] = false
-			}
+	drops.log(len(out))
+	return out
+}
 
-			// Check following messages for matching tool results
-			toolMsgCount := 0
-			for j := i + 1; j < len(sanitized); j++ {
-				if sanitized[j].Role != "tool" {
-					break
-				}
-				toolMsgCount++
-				if _, exists := expected[sanitized[j].ToolCallID]; exists {
-					expected[sanitized[j].ToolCallID] = true
-				}
-			}
+// toolGroup is one assistant tool-call turn with the results that answer it.
+type toolGroup struct {
+	msgs     []spawnllm.Message // the turn, then the results that answer one of its calls
+	span     int                // history entries the group covers, strays included
+	strays   int                // results in the group that answer none of its calls
+	complete bool               // every call has at least one result
+}
 
-			// If any tool_call_id is missing, drop this assistant message and its partial tool messages
-			allFound := true
-			for _, found := range expected {
-				if !found {
-					allFound = false
-					dropIncompleteGroup++
-					break
-				}
-			}
+// collectToolGroup gathers the group starting at history[0], which must be an
+// assistant turn with tool calls. The group extends over the contiguous tool
+// results that follow it; the first non-result ends it.
+func collectToolGroup(history []spawnllm.Message) toolGroup {
+	turn := history[0]
+	answered := make(map[string]bool, len(turn.ToolCalls))
+	for _, tc := range turn.ToolCalls {
+		answered[tc.ID] = false
+	}
 
-			if !allFound {
-				// Skip this assistant message and its tool messages
-				i += toolMsgCount
-				continue
-			}
+	g := toolGroup{msgs: []spawnllm.Message{turn}, span: 1}
+	for _, m := range history[1:] {
+		if m.Role != "tool" {
+			break
 		}
-		final = append(final, msg)
+		g.span++
+		if _, declared := answered[m.ToolCallID]; !declared {
+			g.strays++
+			continue
+		}
+		answered[m.ToolCallID] = true
+		g.msgs = append(g.msgs, m)
 	}
 
-	if n := dropSystem + dropLeadingTool + dropOrphanTool + dropAsstStart + dropAsstBadPred + dropIncompleteGroup; n > 0 {
-		logger.DebugCF("llmcontext", "sanitized history for provider", map[string]any{
-			"dropped_total":         n,
-			"system":                dropSystem,
-			"leading_tool_orphans":  dropLeadingTool,
-			"orphan_tool":           dropOrphanTool,
-			"assistant_at_start":    dropAsstStart,
-			"assistant_bad_pred":    dropAsstBadPred,
-			"incomplete_tool_group": dropIncompleteGroup,
-			"kept":                  len(final),
-		})
+	g.complete = true
+	for _, ok := range answered {
+		if !ok {
+			g.complete = false
+			break
+		}
 	}
+	return g
+}
 
-	return final
+// sanitizeDrops counts what was removed, by reason, so one summary line is
+// logged per dispatch: a single compaction boundary can orphan several
+// leading turns, and a line per message would repeat on every dispatch.
+type sanitizeDrops struct {
+	system, orphanResult, strayResult, badPredecessor, incompleteGroup int
+}
+
+func (d sanitizeDrops) log(kept int) {
+	n := d.system + d.orphanResult + d.strayResult + d.badPredecessor + d.incompleteGroup
+	if n == 0 {
+		return
+	}
+	logger.DebugCF("llmcontext", "sanitized history for provider", map[string]any{
+		"dropped_total":         n,
+		"system":                d.system,
+		"orphan_result":         d.orphanResult,
+		"stray_result":          d.strayResult,
+		"bad_predecessor":       d.badPredecessor,
+		"incomplete_tool_group": d.incompleteGroup,
+		"kept":                  kept,
+	})
 }

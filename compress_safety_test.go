@@ -208,13 +208,14 @@ func TestItem3_ForceCompress_ToolLoopNoOrphanedMessages(t *testing.T) {
 	}
 }
 
-// TestItem3_ForceCompress_OversizedCurrentTurnReturnsError verifies that
-// ForceCompress returns ErrCompressionFailed when the current turn group alone
-// exceeds the context window, rather than silently truncating.
-func TestItem3_ForceCompress_OversizedCurrentTurnReturnsError(t *testing.T) {
+// TestItem3_ForceCompress_OversizedResultInCurrentTurnIsTruncated verifies
+// that when the current turn group alone is past the safety line because of
+// one oversized tool result, ForceCompress truncates that result (the same
+// large-message rule the safety-net compaction applies) rather than failing,
+// so the retry can go out.
+func TestItem3_ForceCompress_OversizedResultInCurrentTurnIsTruncated(t *testing.T) {
 	// contextWindow=100 tokens, safetyPercent=80 → threshold=80 tokens.
 	// Current turn group = one tool result with ~100 tokens (400 chars).
-	// This alone exceeds the 80-token safety threshold.
 	hugePad := strings.Repeat("Z", 400) // ~100 tokens
 
 	history := []spawnllm.Message{
@@ -236,8 +237,60 @@ func TestItem3_ForceCompress_OversizedCurrentTurnReturnsError(t *testing.T) {
 		WithSafetyPercent(80),
 	)
 
+	if err := mgr.ForceCompress(context.Background()); err != nil {
+		t.Fatalf("ForceCompress: %v", err)
+	}
+	got := store.GetHistory("test")
+	if len(got) != 2 || got[0].Role != "assistant" || got[1].ToolCallID != "tc1" {
+		t.Fatalf("window after ForceCompress = %v, want the current tool-call turn", got)
+	}
+	if !strings.Contains(got[1].Content, "[**TRUNCATED DUE TO SIZE**]") {
+		t.Errorf("oversized tool result was not truncated: %d chars", len(got[1].Content))
+	}
+	if mgr.contextPercent(got) >= 80 {
+		t.Errorf("window still past the safety line after ForceCompress: %.0f%%", mgr.contextPercent(got))
+	}
+}
+
+// TestItem3_ForceCompress_OversizedCurrentTurnReturnsError verifies that when
+// the current turn group cannot be made to fit — several results each under
+// the per-message truncation threshold, together past the safety line —
+// ForceCompress keeps the group whole and returns ErrCompressionFailed rather
+// than emptying the window.
+func TestItem3_ForceCompress_OversizedCurrentTurnReturnsError(t *testing.T) {
+	// contextWindow=100 tokens, safetyPercent=80 → threshold=80 tokens; the
+	// truncation threshold is 60 tokens per message. Three results of ~55
+	// tokens (220 chars) each stay under it but total ~165.
+	pad := strings.Repeat("Z", 220)
+
+	history := []spawnllm.Message{
+		{Role: "user", Content: "old message"},
+		{
+			Role: "assistant",
+			ToolCalls: []spawnllm.ToolCall{
+				{ID: "tc1", Function: &spawnllm.FunctionCall{Name: "t", Arguments: `{}`}},
+				{ID: "tc2", Function: &spawnllm.FunctionCall{Name: "t", Arguments: `{}`}},
+				{ID: "tc3", Function: &spawnllm.FunctionCall{Name: "t", Arguments: `{}`}},
+			},
+		},
+		{Role: "tool", Content: pad, ToolCallID: "tc1"},
+		{Role: "tool", Content: pad, ToolCallID: "tc2"},
+		{Role: "tool", Content: pad, ToolCallID: "tc3"},
+	}
+
+	store := &compressTestStore{history: history}
+
+	mgr := newCompressManager(store, nil,
+		WithContextWindow(100),
+		WithSafetyPercent(80),
+	)
+
 	err := mgr.ForceCompress(context.Background())
 	if !errors.Is(err, ErrCompressionFailed) {
 		t.Fatalf("expected ErrCompressionFailed for oversized current turn; got %v", err)
+	}
+	got := store.GetHistory("test")
+	if len(got) != 4 {
+		t.Fatalf("window after failed ForceCompress = %d messages, want the whole current group (4)", len(got))
 	}
 }
