@@ -23,6 +23,12 @@ import (
 // can distinguish graceful-degradation failures from real errors.
 var ErrArchiveUnavailable = errors.New("memory: archive unavailable")
 
+// archiveSchema is the whole per-session database: the all-time message
+// archive with its FTS index, the summary checkpoints, the live window the
+// model is shown (window.seq shares the messages.seq space; created_at is unix
+// nanoseconds, see StoredMessage) and the single session_state row that used
+// to live in <key>.meta.json (timestamps in unix nanoseconds). Truncating the
+// window deletes rows; there is no skip offset.
 const archiveSchema = `
 CREATE TABLE IF NOT EXISTS messages (
     seq          INTEGER PRIMARY KEY,
@@ -54,7 +60,46 @@ CREATE TABLE IF NOT EXISTS summaries (
     covered_seq_end   INTEGER,
     summary           TEXT    NOT NULL
 );
+CREATE TABLE IF NOT EXISTS window (
+    seq        INTEGER PRIMARY KEY,
+    role       TEXT    NOT NULL,
+    payload    TEXT    NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_state (
+    id                             INTEGER PRIMARY KEY CHECK (id = 1),
+    key                            TEXT    NOT NULL,
+    summary                        TEXT    NOT NULL DEFAULT '',
+    next_seq                       INTEGER NOT NULL DEFAULT 0,
+    created_at                     INTEGER NOT NULL DEFAULT 0,
+    updated_at                     INTEGER NOT NULL DEFAULT 0,
+    meaningful_count               INTEGER NOT NULL DEFAULT 0,
+    compressed_at_meaningful_count INTEGER NOT NULL DEFAULT 0,
+    cooling                        INTEGER NOT NULL DEFAULT 0,
+    cooling_since_count            INTEGER NOT NULL DEFAULT 0,
+    summary_generated_at           INTEGER NOT NULL DEFAULT 0,
+    summary_model                  TEXT    NOT NULL DEFAULT '',
+    active_model_index             INTEGER NOT NULL DEFAULT 0,
+    expose_reasoning               INTEGER NOT NULL DEFAULT 0,
+    show_tool_activity             INTEGER NOT NULL DEFAULT 0,
+    pending_turn                   INTEGER NOT NULL DEFAULT 0
+);
 `
+
+// SummaryCheckpoint is one record of the legacy <base>.summaries.jsonl
+// checkpoint log, imported into the summaries table when an archive is opened.
+type SummaryCheckpoint struct {
+	ID              int       `json:"id"`
+	GeneratedAt     time.Time `json:"generated_at"`
+	Model           string    `json:"model,omitempty"`
+	SourceSeqStart  int64     `json:"source_seq_start"`
+	SourceSeqEnd    int64     `json:"source_seq_end"`
+	CoveredSeqStart int64     `json:"covered_seq_start"`
+	CoveredSeqEnd   int64     `json:"covered_seq_end"`
+	PrevHash        string    `json:"prev_hash,omitempty"`
+	SummaryHash     string    `json:"summary_hash"`
+	Summary         string    `json:"summary"`
+}
 
 // SearchResult holds one result from an ArchiveStore.Search call.
 // It pairs the archive sequence number and timestamp with the deserialized message.

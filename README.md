@@ -35,6 +35,40 @@ designed, hardened against production logs and first shipped.
   as [toolspec](https://github.com/PivotLLM/toolspec) definitions over a `Host`
   struct.
 
+## Storage
+
+Every session is one SQLite file, `<sessions dir>/<key>.archive.db`, where the
+key has `:`, `/` and `\` replaced by `_` (`memory.SanitizeSessionKey`). It
+holds four things:
+
+- `messages` and its FTS5 index — the all-time archive, one row per ingested
+  message keyed by seq;
+- `summaries` — the summary checkpoints compaction has produced;
+- `window` — the live history window the model is shown, in the same seq
+  space as `messages`;
+- `session_state` — the one-row session record: key, current summary, next
+  seq, created/updated timestamps, the compaction counters and the
+  pending-turn flag.
+
+`session.NewSQLiteStore(dir)` is the `SessionStore` the engine and the host
+use; it opens each session's database lazily and closes it on `ForgetSession`
+or `Close`. Read-only access by path (a web UI listing sessions, say) goes
+through `memory.OpenReadOnly` and its `Window()` / `State()` methods;
+`memory.ListSessions` and `memory.DeleteSession` enumerate and remove whole
+sessions. Truncation deletes window rows; nothing is logically skipped.
+
+### Migrating from the JSONL layout
+
+Earlier versions kept the window in `<key>.jsonl` and the state in
+`<key>.meta.json` beside the archive. `session.MigrateJSONL(dir)` folds every
+such pair into its `<key>.archive.db` and renames the sources to
+`*.jsonl.migrated` / `*.meta.json.migrated`, which can be deleted once the
+result is verified. Run it once with the service stopped; it is idempotent (a
+session whose database already holds a window is reported as skipped) and it
+never guesses a key from a file name — a `.jsonl` without its `.meta.json` is
+reported as an error. A legacy `<key>.summaries.jsonl` needs no step of its
+own: the archive imports it into `summaries` the first time it is opened.
+
 ## What it does not own
 
 - **Models.** It never calls a provider. Compaction goes through a

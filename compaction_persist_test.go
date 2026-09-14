@@ -12,7 +12,7 @@ import (
 )
 
 // persistentMockStore wraps mockStore and adds CompactionStateStore support,
-// simulating the JSONLBackend's durable state persistence.
+// simulating the SQLiteStore's durable state persistence.
 type persistentMockStore struct {
 	*mockStore
 	states map[string]memory.CompactionState

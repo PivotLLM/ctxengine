@@ -14,7 +14,7 @@ import (
 
 const summaryVersion = 2
 
-// Summary is the structured session summary stored in meta.json and rendered
+// Summary is the structured session summary stored in the session state and rendered
 // into the system prompt. Stored as JSON; rendered as Markdown for injection.
 type Summary struct {
 	Version      int          `json:"version"`

@@ -6,13 +6,12 @@ import (
 )
 
 // SessionStore defines the persistence operations used by the agent loop.
-// Both SessionManager (legacy JSON backend) and JSONLBackend satisfy this
-// interface, allowing the storage layer to be swapped without touching the
-// agent loop code.
+// SQLiteStore is the implementation; the interface lets tests substitute an
+// in-memory store without touching the agent loop code.
 //
 // Write methods (Add*, Set*, Truncate*) are fire-and-forget: they do not
-// return errors. Implementations should log failures internally. This
-// matches the original SessionManager contract that the agent loop relies on.
+// return errors. Implementations should log failures internally. This is the
+// contract the agent loop relies on.
 type SessionStore interface {
 	// AddMessage appends a simple role/content message to the session.
 	AddMessage(sessionKey, role, content string)
@@ -23,7 +22,7 @@ type SessionStore interface {
 	// GetHistory returns the full message history for the session.
 	GetHistory(key string) []spawnllm.Message
 	// GetHistoryWithSeqs returns the full message history with seq numbers intact.
-	// Implementations that have no durable seq counter (e.g. in-memory SessionManager)
+	// Implementations that have no durable seq counter (an in-memory test store)
 	// synthesize seq as i+1 for the i-th message.
 	GetHistoryWithSeqs(key string) []memory.StoredMessage
 	// GetSummary returns the conversation summary, or "" if none.
