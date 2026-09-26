@@ -154,7 +154,7 @@ func (a *ArchiveStore) reader() (db *sql.DB, done func(), err error) {
 		a.mu.Lock()
 		return a.db, a.mu.Unlock, nil
 	}
-	db, err = sql.Open("sqlite", "file:"+a.path+"?mode=ro")
+	db, err = openReadOnly(a.path)
 	if err != nil {
 		return nil, nil, err
 	}
