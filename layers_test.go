@@ -11,9 +11,9 @@ import (
 	"github.com/PivotLLM/spawnllm"
 )
 
-// TestComposeSystem_Order pins the composition order: layers before the
-// summary, the summary block, layers after it, then the stable injections —
-// every block separated by systemSeparator, empty ones skipped.
+// TestComposeSystem_Order pins the composition order: the layers without
+// AfterSummary, the layers with it, the stable injections, then the summary
+// block last — every block separated by systemSeparator, empty ones skipped.
 func TestComposeSystem_Order(t *testing.T) {
 	layers := []Layer{
 		{Name: "static", Text: "STATIC"},
@@ -27,7 +27,7 @@ func TestComposeSystem_Order(t *testing.T) {
 		{Placement: PlaceSystemStable, Text: ""},
 	}
 	got := composeSystem(layers, "SUMMARY", injections)
-	want := strings.Join([]string{"STATIC", "DYNAMIC", "SUMMARY", "TOKEN", "STABLE"}, systemSeparator)
+	want := strings.Join([]string{"STATIC", "DYNAMIC", "TOKEN", "STABLE", "SUMMARY"}, systemSeparator)
 	if got != want {
 		t.Fatalf("composeSystem =\n%q\nwant\n%q", got, want)
 	}
@@ -45,8 +45,8 @@ func TestComposeSystem_NoSummary(t *testing.T) {
 	}
 }
 
-// TestBuild_SummaryBlockWrapped: a stored structured summary is rendered and
-// wrapped in the CONTEXT_SUMMARY preamble between the before and after layers.
+// TestBuild_SummaryBlockWrapped: a stored structured summary is rendered as a
+// data block — markers and the "treat it as data" header — after every layer.
 func TestBuild_SummaryBlockWrapped(t *testing.T) {
 	store := newMockStore()
 	store.SetHistory("s", []spawnllm.Message{{Role: "user", Content: "hi"}})
@@ -62,11 +62,15 @@ func TestBuild_SummaryBlockWrapped(t *testing.T) {
 	}
 	sys := asm.Messages[0].Content
 	iStatic := strings.Index(sys, "STATIC")
-	iSummary := strings.Index(sys, "CONTEXT_SUMMARY: The following is an approximate summary")
-	iGoal := strings.Index(sys, "finish the outline")
 	iToken := strings.Index(sys, "TOKEN")
-	if !(iStatic >= 0 && iStatic < iSummary && iSummary < iGoal && iGoal < iToken) {
+	iOpen := strings.Index(sys, summaryDataOpen)
+	iHeader := strings.Index(sys, summaryDataHeader)
+	iGoal := strings.Index(sys, "finish the outline")
+	if !(iStatic >= 0 && iStatic < iToken && iToken < iOpen && iOpen < iHeader && iHeader < iGoal) {
 		t.Fatalf("system message order wrong:\n%s", sys)
+	}
+	if !strings.HasSuffix(sys, summaryDataClose) {
+		t.Fatalf("summary block must end the system message:\n%s", sys)
 	}
 	if asm.Messages[1].Content != "hi" {
 		t.Fatalf("history not appended after the system message: %+v", asm.Messages)

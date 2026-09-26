@@ -392,7 +392,8 @@ func TestE2E_FullLoopCompactsOnRealStore(t *testing.T) {
 		}
 	}
 
-	// The post-compaction system message: layer, summary block, layer — once.
+	// The post-compaction system message: both layers, then the summary data
+	// block — once.
 	last := s.assemblies[len(s.assemblies)-1].Messages
 	if last[0].Role != "system" {
 		t.Fatalf("messages[0].Role = %q, want system", last[0].Role)
@@ -407,16 +408,16 @@ func TestE2E_FullLoopCompactsOnRealStore(t *testing.T) {
 		t.Fatalf("RenderedSummary() = %q", rendered)
 	}
 	sys := last[0].Content
-	prefix, suffix := e2eLayerBefore+systemSeparator, systemSeparator+e2eLayerAfter
-	if !strings.HasPrefix(sys, prefix) || !strings.HasSuffix(sys, suffix) {
-		t.Fatalf("system message is not layer/summary/layer:\n%s", sys)
+	prefix := e2eLayerBefore + systemSeparator + e2eLayerAfter + systemSeparator
+	if !strings.HasPrefix(sys, prefix) {
+		t.Fatalf("system message does not open with the two layers:\n%s", sys)
 	}
-	middle := strings.TrimSuffix(strings.TrimPrefix(sys, prefix), suffix)
-	if !strings.HasPrefix(middle, "CONTEXT_SUMMARY:") || !strings.HasSuffix(middle, rendered) {
-		t.Fatalf("the block between the layers is not the rendered summary:\n%s", middle)
+	block := strings.TrimPrefix(sys, prefix)
+	if !strings.HasPrefix(block, summaryDataOpen+"\n"+summaryDataHeader) || !strings.HasSuffix(block, rendered+"\n"+summaryDataClose) {
+		t.Fatalf("the block after the layers is not the rendered summary as a data block:\n%s", block)
 	}
-	if strings.Count(sys, "CONTEXT_SUMMARY:") != 1 {
-		t.Errorf("summary block appears %d times", strings.Count(sys, "CONTEXT_SUMMARY:"))
+	if strings.Count(sys, summaryDataOpen) != 1 {
+		t.Errorf("summary block appears %d times", strings.Count(sys, summaryDataOpen))
 	}
 	assertWellFormed(t, last)
 

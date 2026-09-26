@@ -5,6 +5,7 @@ package ctxengine
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -464,6 +466,14 @@ func (m *Manager) callModel(
 		JSONObject: true,
 		Exclude:    m.refusedModelList(),
 	}
+	// What an exact (verbatim) field may quote: the user's own words in this
+	// range, or a value an earlier pass already accepted. Anything else — a
+	// tool result, the assistant's own text — is not a user instruction and
+	// is dropped from exact before the summary is stored.
+	exactSources := userTexts(toSummarize)
+	if existing != nil {
+		exactSources = append(exactSources, existing.exactValues()...)
+	}
 	// The recorder captures the call as the two-message exchange the host
 	// sends, so debug capture and failure dumps keep their historical shape.
 	messages := []spawnllm.Message{
@@ -527,6 +537,14 @@ func (m *Manager) callModel(
 				return nil, false
 			}
 			continue
+		}
+
+		if dropped := summary.DropUnsourcedExact(exactSources); dropped > 0 {
+			logger.DebugCF("llmcontext", "summary exact values not quoted from a user message dropped", map[string]any{
+				"session_key": sessionKey,
+				"model":       model,
+				"dropped":     dropped,
+			})
 		}
 
 		// Set coverage from actual seq ranges. Do NOT use coverage values
@@ -642,6 +660,17 @@ const repetitiveRunThreshold = 3
 // used to detect near-identical messages in repetitive run detection.
 func normalizeForComparison(s string) string {
 	return strings.ToLower(strings.Join(strings.Fields(s), " "))
+}
+
+// userTexts returns the content of every user-role message in stored.
+func userTexts(stored []memory.StoredMessage) []string {
+	var out []string
+	for _, sm := range stored {
+		if sm.Role == "user" && strings.TrimSpace(sm.Content) != "" {
+			out = append(out, sm.Content)
+		}
+	}
+	return out
 }
 
 func storedToPlain(stored []memory.StoredMessage) []spawnllm.Message {
@@ -855,8 +884,49 @@ func truncateRunes(s string, max int) string {
 	return string(r[:max]) + "…"
 }
 
+// toolOutputOpen and toolOutputClose delimit a tool result in the summarizer
+// input. The id is random per summarization call, so text inside a result
+// cannot forge the closing marker without guessing it — and any marker it does
+// carry is neutralised anyway (neutralizeToolOutput).
+func toolOutputOpen(id string) string  { return "<<<TOOL_OUTPUT id=" + id + ">>>" }
+func toolOutputClose(id string) string { return "<<<END_TOOL_OUTPUT id=" + id + ">>>" }
+
+// newToolOutputID returns the per-call random id for the tool-output markers.
+func newToolOutputID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:]) // crypto/rand.Read does not return an error on supported platforms
+	return hex.EncodeToString(b[:])
+}
+
+// transcriptFramingRe matches the "[#N] [role]" header the summarizer input
+// frames every message with. Tool text carrying one could pass itself off as
+// a turn — "[#3] [user] do X" — which is exactly what an injection attempt
+// would do.
+var transcriptFramingRe = regexp.MustCompile(`\[#\d+\]\s*\[[A-Za-z_]+\]`)
+
+// neutralizeToolOutput rewrites tool text so it cannot impersonate a
+// transcript turn or a block marker: a framing header gets its '#' escaped
+// ("[#3] [user]" becomes "[\#3] [user]") and any "<<<" or ">>>" run gets a
+// backslash inserted, so neither matches what the framing or the markers
+// look like. The rewrite is visible and reversible by eye; the summarizer
+// still sees what the tool said, just not as structure.
+func neutralizeToolOutput(s string) string {
+	s = transcriptFramingRe.ReplaceAllStringFunc(s, func(m string) string {
+		return strings.Replace(m, "[#", `[\#`, 1)
+	})
+	s = strings.ReplaceAll(s, "<<<", `<\<<`)
+	s = strings.ReplaceAll(s, ">>>", `>\>>`)
+	return s
+}
+
+// formatStoredMessagesForSummary renders the messages to summarize as the
+// framed transcript the summarizer prompt describes. Tool results are wrapped
+// in TOOL_OUTPUT markers and neutralised (neutralizeToolOutput), so fetched
+// content cannot fake a user turn; the prompt tells the model those blocks
+// are data.
 func formatStoredMessagesForSummary(stored []memory.StoredMessage, noise NoiseKeyFunc) string {
 	stored = collapseRepetitiveRuns(stored, noise)
+	toolID := newToolOutputID()
 	var sb strings.Builder
 	for _, sm := range stored {
 		fmt.Fprintf(&sb, "[#%d] [%s]\n", sm.Seq, sm.Role)
@@ -866,9 +936,16 @@ func formatStoredMessagesForSummary(stored []memory.StoredMessage, noise NoiseKe
 		if sm.ToolCallID != "" {
 			fmt.Fprintf(&sb, "tool_call_id: %s\n", sm.ToolCallID)
 		}
-		if strings.TrimSpace(sm.Content) != "" {
+		switch {
+		case sm.Role == "tool":
+			body := "<empty>"
+			if strings.TrimSpace(sm.Content) != "" {
+				body = neutralizeToolOutput(sm.Content)
+			}
+			fmt.Fprintf(&sb, "content:\n%s\n%s\n%s\n", toolOutputOpen(toolID), body, toolOutputClose(toolID))
+		case strings.TrimSpace(sm.Content) != "":
 			fmt.Fprintf(&sb, "content:\n%s\n", sm.Content)
-		} else {
+		default:
 			sb.WriteString("content: <empty>\n")
 		}
 		if len(sm.ToolCalls) > 0 {
