@@ -183,6 +183,10 @@ type managerConfig struct {
 	// eviction is the per-turn tool-result eviction policy. Defaults to
 	// DefaultEvictionPolicy() (enabled); override via WithEvictionPolicy.
 	eviction EvictionPolicy
+	// evictionRoles says which tools are re-retrievable readers and which are
+	// writers. Defaults to DefaultEvictionRoles(); override via
+	// WithEvictionRoles.
+	evictionRoles EvictionRoles
 }
 
 func defaultManagerConfig() managerConfig {
@@ -202,7 +206,18 @@ func defaultManagerConfig() managerConfig {
 		charsPerToken:       defaultCharsPerToken,
 		tokenSafetyMargin:   defaultTokenSafetyMargin,
 		eviction:            DefaultEvictionPolicy(),
+		evictionRoles:       DefaultEvictionRoles(),
 	}
+}
+
+// WithEvictionRoles sets which tools the eviction sweep treats as
+// re-retrievable readers and as writers, replacing DefaultEvictionRoles. A
+// host populates it from its tool metadata; to extend rather than replace the
+// defaults, start from DefaultEvictionRoles() and add to its maps. Names are
+// the bare tool names the host publishes; an "mcp__server__" prefix on a call
+// is stripped before lookup.
+func WithEvictionRoles(r EvictionRoles) Option {
+	return func(c *managerConfig) { c.evictionRoles = r }
 }
 
 // WithEvictionPolicy sets the per-turn tool-result eviction policy. The agent

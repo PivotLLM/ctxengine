@@ -814,7 +814,7 @@ func collapseCronRun(stored []memory.StoredMessage, start int, noise NoiseKeyFun
 	// and notes the full [first-last] seq range in its text. Seqs are permanent
 	// identities — they are never renumbered — so the collapsed-away messages
 	// simply do not appear inline in the retained tail; they remain intact in the
-	// archive and stay retrievable by seq via get_session_messages.
+	// archive and stay retrievable by seq via session_messages.
 	firstSeq := stored[start].Seq
 	lastSeq := stored[i-1].Seq
 
@@ -834,7 +834,7 @@ const cronRunAnchorKeyMaxLen = 40
 // cronRunAnchor renders the counted anchor string for a collapsed no-op run of
 // a scheduled job identified by key. It states the count and the
 // [firstSeq-lastSeq] range so a reader knows exactly which archived messages
-// were elided and can retrieve them via get_session_messages.
+// were elided and can retrieve them via session_messages.
 func cronRunAnchor(key string, count int, firstSeq, lastSeq int64, reply string) string {
 	shortReply := truncateRunes(reply, 60)
 	label := truncateRunes(strings.Join(strings.Fields(key), " "), cronRunAnchorKeyMaxLen)
@@ -856,7 +856,7 @@ func cronRunAnchor(key string, count int, firstSeq, lastSeq int64, reply string)
 // identical scheduled checks verbatim. Only cron no-op runs are collapsed; every
 // other message is preserved unchanged. The anchor carries the seq of the first
 // message in the run; the elided originals remain in the archive (retrievable via
-// get_session_messages), so this elides them only from the live tail, never from
+// session_messages), so this elides them only from the live tail, never from
 // the durable record.
 func collapseRetainedCronRuns(stored []memory.StoredMessage, noise NoiseKeyFunc) []memory.StoredMessage {
 	if len(stored) < repetitiveRunThreshold {

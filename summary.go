@@ -409,10 +409,10 @@ func (s *Summary) Render(archiveMinSeq, archiveMaxSeq int64) string {
 		if !s.CoveredSeqStartAt.IsZero() && !s.CoveredSeqEndAt.IsZero() {
 			startStr := s.CoveredSeqStartAt.UTC().Format("2006-01-02 15:04 UTC")
 			endStr := s.CoveredSeqEndAt.UTC().Format("2006-01-02 15:04 UTC")
-			fmt.Fprintf(&sb, "Context summary: messages #%d (%s) - #%d (%s). Full messages retrievable via get_session_messages.\n",
+			fmt.Fprintf(&sb, "Context summary: messages #%d (%s) - #%d (%s). Full messages retrievable via session_messages.\n",
 				s.CoveredSeqStart, startStr, s.CoveredSeqEnd, endStr)
 		} else {
-			fmt.Fprintf(&sb, "Context summary: messages #%d - #%d. Full messages retrievable via get_session_messages.\n",
+			fmt.Fprintf(&sb, "Context summary: messages #%d - #%d. Full messages retrievable via session_messages.\n",
 				s.CoveredSeqStart, s.CoveredSeqEnd)
 		}
 		// Stamp generation metadata so agents can identify when, by what model,
@@ -487,7 +487,7 @@ func (s *Summary) Render(archiveMinSeq, archiveMaxSeq int64) string {
 		}
 	}
 	if len(inWindow) > 0 {
-		sb.WriteString("\n## Retrievable History (use mcp__claw__get_session_messages to fetch full content)\n")
+		sb.WriteString("\n## Retrievable History (use session_messages to fetch full content)\n")
 		for _, e := range inWindow {
 			if e.SeqStart == e.SeqEnd {
 				fmt.Fprintf(&sb, "- [#%d] %s: %s\n", e.SeqStart, e.Role, e.Label)

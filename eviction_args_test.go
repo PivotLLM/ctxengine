@@ -212,7 +212,7 @@ func TestEvictLargeArgs_KeepsRuntimeMapInStep(t *testing.T) {
 		Function:  &spawnllm.FunctionCall{Name: "file_write", Arguments: `{"path":"a.md","content":"` + payload + `"}`},
 	}
 
-	if got := evictLargeArgs(&tc, 1024); len(got) != 1 {
+	if got := evictLargeArgs(&tc, 1024, DefaultEvictionRoles()); len(got) != 1 {
 		t.Fatalf("expected 1 argument evicted, got %d", len(got))
 	}
 	runtime, _ := tc.Arguments["content"].(string)
@@ -235,7 +235,7 @@ func TestEvictLargeArgs_NoFunctionForm(t *testing.T) {
 		ID: "x", Name: "file_write",
 		Arguments: map[string]any{"content": strings.Repeat("p", 4_000)},
 	}
-	if got := evictLargeArgs(&tc, 1024); got != nil {
+	if got := evictLargeArgs(&tc, 1024, DefaultEvictionRoles()); got != nil {
 		t.Errorf("expected no evictions without a Function form, got %+v", got)
 	}
 }

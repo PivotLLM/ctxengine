@@ -135,9 +135,18 @@ func capResource(s string, max int) string {
 // how to recover the content.
 const evictionMarker = "[evicted:"
 
-func evictionPlaceholder(tool, resource string, bytes int) string {
-	return fmt.Sprintf("%s %s %s (%d bytes) — content evicted to save context; re-read if you need it again]",
-		evictionMarker, tool, resource, bytes)
+// sessionMessagesTool is the name the host publishes the session history tool
+// under (the tools package exports it bare as "messages"; ClawEh mounts it as
+// session_messages). Named in placeholders so the model knows how to get the
+// exact content back.
+const sessionMessagesTool = "session_messages"
+
+// evictionPlaceholder is the text left in place of an evicted tool result. It
+// names the tool and resource so the model can re-read, and the archive seq
+// so the exact content can be pulled back with the session messages tool.
+func evictionPlaceholder(tool, resource string, bytes int, seq int64) string {
+	return fmt.Sprintf("%s %s %s (%d bytes, seq #%d) — content evicted to save context; re-read it, or fetch seq #%d with %s]",
+		evictionMarker, tool, resource, bytes, seq, seq, sessionMessagesTool)
 }
 
 func isEvicted(content string) bool {
@@ -178,7 +187,7 @@ type argEviction struct {
 // The rewrite goes through a parsed map and is re-marshalled, so the stored
 // arguments remain valid JSON; a provider replaying the message sees a
 // well-formed (if abbreviated) tool call rather than a truncated string.
-func evictLargeArgs(tc *spawnllm.ToolCall, minBytes int) []argEviction {
+func evictLargeArgs(tc *spawnllm.ToolCall, minBytes int, roles EvictionRoles) []argEviction {
 	if minBytes <= 0 || tc.Function == nil {
 		return nil
 	}
@@ -186,9 +195,9 @@ func evictLargeArgs(tc *spawnllm.ToolCall, minBytes int) []argEviction {
 	if len(args) == 0 {
 		return nil
 	}
-	resource, _ := writerResource(name, args)
+	resource, _ := roles.writerResource(name, args)
 	if resource == "" {
-		resource, _ = readerResource(name, args)
+		resource, _ = roles.readerResource(name, args)
 	}
 
 	var out []argEviction
@@ -229,67 +238,77 @@ func sortedArgKeys(args map[string]any) []string {
 	return keys
 }
 
-// evictionReaderArg maps a re-retrievable reader tool to the argument naming the
-// resource it read. Only these tools are ever evicted — their content can be
-// recovered by calling the tool again.
-var evictionReaderArg = map[string]string{
-	"file_read_bytes":   "path",
-	"file_read_lines":   "path",
-	"file_list":         "path",
-	"file_search_lines": "path",
-	"file_search_bytes": "path",
-	"web_fetch":         "url",
+// ReaderRole describes a tool whose result can be fetched again — a file read,
+// a web fetch, a search — so the sweep may replace an old result with a
+// placeholder and the model can re-run the tool if it needs the content.
+type ReaderRole struct {
+	// ResourceArg names the argument that says what was read (a path, a URL).
+	// Required: a result whose call has no resource is never evicted.
+	ResourceArg string
+	// ResourceDefault is the resource implied when ResourceArg is absent or
+	// empty — "." for a search tool that defaults to the workspace root.
+	// Without it a repository-wide search, typically the largest result,
+	// would be the one result never evicted.
+	ResourceDefault string
+	// KeyArg names a string argument that distinguishes two reads of one
+	// resource — a search query. Two searches of one tree with different
+	// queries return different content, so keying on the bare path would make
+	// the second silently supersede the first.
+	KeyArg string
+	// RangeArg names a numeric argument giving the start of the slice read —
+	// start_line, offset. Reads of one file at different starts are distinct
+	// pages, not duplicates, so read-vs-read supersession keys on
+	// resource+start; otherwise reading page 2 would evict page 1.
+	RangeArg string
+	// RangeDefault is the slice start implied when RangeArg is absent.
+	RangeDefault int64
 }
 
-// evictionReaderResourceDefault supplies the implied resource for readers whose
-// resource argument is optional. The search tools default to the workspace root
-// when path is omitted, so without this a repository-wide search — typically the
-// largest result of the three — would be the one result never evicted.
-var evictionReaderResourceDefault = map[string]string{
-	"file_search_lines": ".",
-	"file_search_bytes": ".",
+// WriterRole describes a tool that mutates a resource. A successful call
+// supersedes every earlier read of that resource, whatever the page.
+type WriterRole struct {
+	// ResourceArg names the argument that says what was written. For a move
+	// it is the source: reads of the moved-away file are now stale.
+	ResourceArg string
 }
 
-// evictionReaderKeyArg names a STRING argument that distinguishes two reads of
-// the same resource, the string analogue of evictionReaderRangeArg. Two searches
-// of one tree with different queries return different content, so keying on the
-// bare path would make the second silently evict the first.
-var evictionReaderKeyArg = map[string]string{
-	"file_search_lines": "query",
-	"file_search_bytes": "query",
+// EvictionRoles maps tool names to their eviction roles. Names are matched
+// after any "mcp__server__" prefix is stripped, so a host lists the bare
+// names it publishes. DefaultEvictionRoles covers the ClawEh file and web
+// tools; a host with other tools supplies its own with WithEvictionRoles,
+// usually starting from the defaults.
+type EvictionRoles struct {
+	Readers map[string]ReaderRole
+	Writers map[string]WriterRole
 }
 
-// evictionReaderRangeArg maps a paginated reader tool to the argument that names
-// the start of the slice it read. Reads of the SAME file at different starts are
-// distinct pages, not duplicates, so read-vs-read supersession keys on
-// path+start — otherwise reading page 2 of a large file would evict page 1.
-var evictionReaderRangeArg = map[string]string{
-	"file_read_lines": "start_line",
-	"file_read_bytes": "offset",
-}
-
-// evictionReaderRangeDefault is the implied slice start when the range arg is
-// omitted (file_read_lines defaults start_line=1; file_read_bytes offset=0).
-var evictionReaderRangeDefault = map[string]int64{
-	"file_read_lines": 1,
-	"file_read_bytes": 0,
-}
-
-// evictionWriterArg maps a writer tool to the argument naming the resource it
-// mutates. A successful write supersedes any earlier read of the same resource.
-var evictionWriterArg = map[string]string{
-	"file_write":        "path",
-	"file_edit":         "path",
-	"file_append":       "path",
-	"file_copy":         "destination_path",
-	"file_edit_lines":   "path",
-	"file_edit_bytes":   "path",
-	"file_insert_lines": "path",
-	"file_insert_bytes": "path",
-	"file_delete_lines": "path",
-	"file_delete_bytes": "path",
-	"file_delete":       "path",
-	"file_move":         "source_path", // the moved-away file; reads of it are now stale
+// DefaultEvictionRoles returns the built-in roles: the file_* readers and
+// writers and web_fetch.
+func DefaultEvictionRoles() EvictionRoles {
+	return EvictionRoles{
+		Readers: map[string]ReaderRole{
+			"file_read_bytes":   {ResourceArg: "path", RangeArg: "offset", RangeDefault: 0},
+			"file_read_lines":   {ResourceArg: "path", RangeArg: "start_line", RangeDefault: 1},
+			"file_list":         {ResourceArg: "path"},
+			"file_search_lines": {ResourceArg: "path", ResourceDefault: ".", KeyArg: "query"},
+			"file_search_bytes": {ResourceArg: "path", ResourceDefault: ".", KeyArg: "query"},
+			"web_fetch":         {ResourceArg: "url"},
+		},
+		Writers: map[string]WriterRole{
+			"file_write":        {ResourceArg: "path"},
+			"file_edit":         {ResourceArg: "path"},
+			"file_append":       {ResourceArg: "path"},
+			"file_copy":         {ResourceArg: "destination_path"},
+			"file_edit_lines":   {ResourceArg: "path"},
+			"file_edit_bytes":   {ResourceArg: "path"},
+			"file_insert_lines": {ResourceArg: "path"},
+			"file_insert_bytes": {ResourceArg: "path"},
+			"file_delete_lines": {ResourceArg: "path"},
+			"file_delete_bytes": {ResourceArg: "path"},
+			"file_delete":       {ResourceArg: "path"},
+			"file_move":         {ResourceArg: "source_path"},
+		},
+	}
 }
 
 type toolMeta struct {
@@ -323,52 +342,54 @@ func normToolName(name string) string {
 	return name
 }
 
-func readerResource(tool string, args map[string]any) (string, bool) {
-	arg, ok := evictionReaderArg[tool]
-	if !ok || args == nil {
+// readerResource returns the resource a reader tool call read, and whether
+// tool is a reader with a resource at all.
+func (r EvictionRoles) readerResource(tool string, args map[string]any) (string, bool) {
+	role, ok := r.Readers[tool]
+	if !ok || args == nil || role.ResourceArg == "" {
 		return "", false
 	}
-	v, _ := args[arg].(string)
+	v, _ := args[role.ResourceArg].(string)
 	v = strings.TrimSpace(v)
 	if v == "" {
-		v = evictionReaderResourceDefault[tool]
+		v = role.ResourceDefault
 	}
 	return v, v != ""
 }
 
-func writerResource(tool string, args map[string]any) (string, bool) {
-	arg, ok := evictionWriterArg[tool]
-	if !ok || args == nil {
+// writerResource returns the resource a writer tool call mutated, and whether
+// tool is a writer with a resource at all.
+func (r EvictionRoles) writerResource(tool string, args map[string]any) (string, bool) {
+	role, ok := r.Writers[tool]
+	if !ok || args == nil || role.ResourceArg == "" {
 		return "", false
 	}
-	v, _ := args[arg].(string)
+	v, _ := args[role.ResourceArg].(string)
 	v = strings.TrimSpace(v)
 	return v, v != ""
 }
 
-// readerSliceKey returns the read-vs-read supersession key: the resource path
-// plus, for paginated readers, the slice start — so distinct pages of one file
-// coexist and only a re-read of the SAME page supersedes. Non-paginated readers
-// (file_list, web_fetch) key on the bare resource. Write-invalidation still keys
-// on the bare path (any edit invalidates every cached page of that file).
-func readerSliceKey(tool string, args map[string]any) (string, bool) {
-	res, ok := readerResource(tool, args)
+// readerSliceKey returns the read-vs-read supersession key: the resource plus
+// the KeyArg value or, for paginated readers, the slice start — so distinct
+// pages of one file coexist and only a re-read of the SAME page supersedes.
+// Readers with neither key on the bare resource. Write-invalidation still keys
+// on the bare resource (any edit invalidates every cached page of that file).
+func (r EvictionRoles) readerSliceKey(tool string, args map[string]any) (string, bool) {
+	res, ok := r.readerResource(tool, args)
 	if !ok {
 		return "", false
 	}
-	if keyArg, keyed := evictionReaderKeyArg[tool]; keyed {
-		discriminator, _ := args[keyArg].(string)
+	role := r.Readers[tool]
+	if role.KeyArg != "" {
+		discriminator, _ := args[role.KeyArg].(string)
 		return res + "#" + discriminator, true
 	}
-	rangeArg, paged := evictionReaderRangeArg[tool]
-	if !paged {
+	if role.RangeArg == "" {
 		return res, true
 	}
-	start := evictionReaderRangeDefault[tool]
-	if args != nil {
-		if v, present := args[rangeArg]; present {
-			start = toInt64(v)
-		}
+	start := role.RangeDefault
+	if v, present := args[role.RangeArg]; present {
+		start = toInt64(v)
 	}
 	return fmt.Sprintf("%s#%d", res, start), true
 }
@@ -440,6 +461,7 @@ func (m *Manager) sweepEvictions(_ context.Context, force bool) []EvictionEvent 
 	if !p.Enabled {
 		return nil
 	}
+	roles := m.cfg.evictionRoles
 	stored := m.store.GetHistoryWithSeqs(m.sessionKey)
 	if len(stored) == 0 {
 		return nil
@@ -483,7 +505,7 @@ func (m *Manager) sweepEvictions(_ context.Context, force bool) []EvictionEvent 
 		for _, tc := range mm.ToolCalls {
 			name, args := normToolCall(tc)
 			callByID[tc.ID] = toolMeta{tool: name, args: args}
-			if res, ok := writerResource(name, args); ok {
+			if res, ok := roles.writerResource(name, args); ok {
 				// Defer recording the write until its result's error status is known.
 				writes = append(writes, pendingWrite{res: res, idx: idx, callID: tc.ID})
 			}
@@ -491,7 +513,7 @@ func (m *Manager) sweepEvictions(_ context.Context, force bool) []EvictionEvent 
 		if mm.Role == "tool" && mm.ToolCallID != "" {
 			errByCallID[mm.ToolCallID] = toolErr[idx]
 			meta := callByID[mm.ToolCallID]
-			if key, ok := readerSliceKey(meta.tool, meta.args); ok {
+			if key, ok := roles.readerSliceKey(meta.tool, meta.args); ok {
 				if cur, k := maxReadIdx[key]; !k || idx > cur {
 					maxReadIdx[key] = idx
 				}
@@ -525,11 +547,11 @@ func (m *Manager) sweepEvictions(_ context.Context, force bool) []EvictionEvent 
 			continue
 		}
 		meta := callByID[mm.ToolCallID]
-		res, ok := readerResource(meta.tool, meta.args)
+		res, ok := roles.readerResource(meta.tool, meta.args)
 		if !ok {
 			continue // not a re-retrievable reader → never evicted
 		}
-		sliceKey, _ := readerSliceKey(meta.tool, meta.args)
+		sliceKey, _ := roles.readerSliceKey(meta.tool, meta.args)
 		size := len(mm.Content)
 		if size == 0 {
 			continue
@@ -610,7 +632,7 @@ func (m *Manager) sweepEvictions(_ context.Context, force bool) []EvictionEvent 
 				continue
 			}
 			for c := range stored[idx].ToolCalls {
-				evicted := evictLargeArgs(&stored[idx].ToolCalls[c], p.ArgBytes)
+				evicted := evictLargeArgs(&stored[idx].ToolCalls[c], p.ArgBytes, roles)
 				for _, e := range evicted {
 					e.callIdx = c
 					argMarks[idx] = append(argMarks[idx], e)
@@ -676,7 +698,7 @@ func (m *Manager) sweepEvictions(_ context.Context, force bool) []EvictionEvent 
 		}
 		mm := stored[idx].Message
 		meta := callByID[mm.ToolCallID]
-		res, _ := readerResource(meta.tool, meta.args)
+		res, _ := roles.readerResource(meta.tool, meta.args)
 		ev := EvictionEvent{
 			Seq:      stored[idx].Seq,
 			Tool:     meta.tool,
@@ -685,7 +707,7 @@ func (m *Manager) sweepEvictions(_ context.Context, force bool) []EvictionEvent 
 			AgeTurns: ages[idx],
 			Reason:   reason,
 		}
-		stored[idx].Content = evictionPlaceholder(meta.tool, res, ev.Bytes)
+		stored[idx].Content = evictionPlaceholder(meta.tool, res, ev.Bytes, ev.Seq)
 		events = append(events, ev)
 		logger.DebugCF("llmcontext", "evicted tool result", map[string]any{
 			"session_key": m.sessionKey,

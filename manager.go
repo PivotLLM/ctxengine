@@ -791,24 +791,25 @@ func (m *Manager) archiveAppend(seq int64, msg spawnllm.Message) {
 }
 
 // archiveContentMaxBytes is the default maximum number of content bytes stored
-// per message in the archive for TOOL results. Messages whose Content exceeds
-// this limit are truncated before writing; the LLM already saw the full content
-// in the active context window, so only a compact summary is needed for history.
-// Tool results that contain large file payloads are the primary use-case, and
-// they are re-retrievable — the file is still on disk.
+// per message in the archive. Messages whose Content exceeds this limit are
+// truncated before writing. The archive is the durable record: an evicted tool
+// result points at its archive seq so the exact content can be pulled back
+// with the session messages tool, and the archive feeds search and memory
+// consolidation — so the cap is generous. 256 KB keeps every ordinary file
+// read, web fetch and search result whole; it exists only to stop a
+// pathological row (a single production result measured 5.7 MB) from bloating
+// an archive that SQLite otherwise stores cheaply.
 // Override per-agent via WithArchiveContentMaxBytes.
-const archiveContentMaxBytes = 4096
+const archiveContentMaxBytes = 256 * 1024
 
-// archiveConversationMaxBytes is the cap applied to user and assistant messages
-// instead. Conversation is not re-retrievable and it is what the archive exists
-// to preserve — it also feeds cognitive-memory consolidation, which distils
-// long-term memory from these rows, so a clipped instruction yields a memory
-// built on a fragment. Measured across production archives, user and assistant
-// content sits at ~1.2KB and ~2.7KB at the 99th percentile: a 4KB cap sits just
-// inside the distribution and clips only the longest, most substantive turns,
-// while this cap clears it entirely at a cost of a few hundred KB per archive.
-// Tool results keep the tighter cap because they carry the real bulk (a single
-// production row measured 5.7MB).
+// archiveConversationMaxBytes is the floor for user and assistant messages: an
+// explicit per-agent cap below it is raised to it for those roles. Conversation
+// is not re-retrievable and it is what the archive exists to preserve — it also
+// feeds cognitive-memory consolidation, which distils long-term memory from
+// these rows, so a clipped instruction yields a memory built on a fragment.
+// Measured across production archives, user and assistant content sits at
+// ~1.2KB and ~2.7KB at the 99th percentile, so this floor clears the
+// distribution entirely.
 const archiveConversationMaxBytes = 16384
 
 // archiveContentLimit returns the effective per-message archive content cap,
@@ -826,9 +827,9 @@ func archiveTruncateContent(msg spawnllm.Message, maxBytes int) spawnllm.Message
 	if maxBytes <= 0 {
 		maxBytes = archiveContentMaxBytes
 	}
-	// Conversation gets the larger cap; tool results keep the configured one.
-	// An explicit per-agent setting above the conversation cap wins for both,
-	// so raising the limit never silently lowers it for user/assistant text.
+	// Conversation never goes below its floor; tool results take the configured
+	// cap as is. A setting above the floor applies to every role, so raising
+	// the limit never silently lowers it for user/assistant text.
 	if msg.Role != "tool" && maxBytes < archiveConversationMaxBytes {
 		maxBytes = archiveConversationMaxBytes
 	}

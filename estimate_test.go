@@ -4,6 +4,7 @@
 package ctxengine
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/PivotLLM/spawnllm"
@@ -87,10 +88,14 @@ func TestArchiveTruncateContent_Limit(t *testing.T) {
 		t.Fatalf("truncated content unexpectedly long: %d", len(got.Content))
 	}
 
-	// Non-positive limit falls back to the default (4096), so 8192 bytes truncate.
-	fallback := archiveTruncateContent(msg, 0)
-	if len(fallback.Content) >= len(long) {
-		t.Fatalf("fallback limit did not truncate: len %d", len(fallback.Content))
+	// Non-positive limit falls back to the default cap, so 8192 bytes are kept
+	// whole and content over the cap is truncated.
+	if fallback := archiveTruncateContent(msg, 0); len(fallback.Content) != len(long) {
+		t.Fatalf("fallback limit truncated %d bytes under the default cap: len %d", len(long), len(fallback.Content))
+	}
+	over := spawnllm.Message{Role: "tool", Content: strings.Repeat("x", archiveContentMaxBytes*2)}
+	if fallback := archiveTruncateContent(over, 0); len(fallback.Content) >= len(over.Content) {
+		t.Fatalf("fallback limit did not truncate content over the default cap: len %d", len(fallback.Content))
 	}
 
 	// Content within the limit is returned unchanged.

@@ -938,7 +938,7 @@ func TestE2E_EvictionObservedThroughAssemble(t *testing.T) {
 	if ev.Seq != readSeq || ev.Tool != "file_read_bytes" || ev.Resource != path || ev.Bytes != len(content) || ev.Reason != "stale" || ev.AgeTurns <= 10 {
 		t.Errorf("eviction event = %+v", ev)
 	}
-	placeholder := evictionPlaceholder("file_read_bytes", path, len(content))
+	placeholder := evictionPlaceholder("file_read_bytes", path, len(content), readSeq)
 
 	// The built slice carries the placeholder in the tool result's slot.
 	found := false
