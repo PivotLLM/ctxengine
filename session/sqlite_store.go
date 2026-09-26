@@ -21,8 +21,8 @@ import (
 // session state share the file with the all-time archive. One
 // *memory.ArchiveStore handle per session, opened lazily on first use, cached,
 // and closed by ForgetSession or Close. Every operation on a session runs
-// under that session's mutex. Write errors are logged rather than returned,
-// matching the fire-and-forget contract the agent loop relies on.
+// under that session's mutex. Write methods return their error; read methods
+// log it and return the empty value.
 type SQLiteStore struct {
 	dir      string
 	mu       sync.Mutex // protects sessions and noiseKey
@@ -112,14 +112,16 @@ func warn(op, key string, err error) {
 	logger.WarnCF("session", op, map[string]any{"session": key, "error": err.Error()})
 }
 
-func (s *SQLiteStore) AddMessage(sessionKey, role, content string) {
-	s.AddFullMessage(sessionKey, spawnllm.Message{Role: role, Content: content})
+func (s *SQLiteStore) AddMessage(sessionKey, role, content string) error {
+	_, err := s.AddFullMessage(sessionKey, spawnllm.Message{Role: role, Content: content})
+	return err
 }
 
 // AddFullMessage appends msg to the window under the next sequence number and
-// returns it (0 on failure). The message counts towards meaningful_count
-// unless the noise classifier finds it a duplicate of the previous one.
-func (s *SQLiteStore) AddFullMessage(sessionKey string, msg spawnllm.Message) int64 {
+// returns it, or 0 and the error when nothing was written. The message counts
+// towards meaningful_count unless the noise classifier finds it a duplicate
+// of the previous one.
+func (s *SQLiteStore) AddFullMessage(sessionKey string, msg spawnllm.Message) (int64, error) {
 	var seq int64
 	err := s.with(sessionKey, func(a *memory.ArchiveStore, h *sessionHandle, noise memory.NoiseKeyFunc) error {
 		st, err := state(a, sessionKey)
@@ -165,10 +167,9 @@ func (s *SQLiteStore) AddFullMessage(sessionKey string, msg spawnllm.Message) in
 		return nil
 	})
 	if err != nil {
-		warn("add full message", sessionKey, err)
-		return 0
+		return 0, err
 	}
-	return seq
+	return seq, nil
 }
 
 func (s *SQLiteStore) GetHistory(key string) []spawnllm.Message {
@@ -208,8 +209,8 @@ func (s *SQLiteStore) GetSummary(key string) string {
 	return summary
 }
 
-func (s *SQLiteStore) SetSummary(key, summary string) {
-	err := s.with(key, func(a *memory.ArchiveStore, _ *sessionHandle, _ memory.NoiseKeyFunc) error {
+func (s *SQLiteStore) SetSummary(key, summary string) error {
+	return s.with(key, func(a *memory.ArchiveStore, _ *sessionHandle, _ memory.NoiseKeyFunc) error {
 		st, err := state(a, key)
 		if err != nil {
 			return err
@@ -222,17 +223,14 @@ func (s *SQLiteStore) SetSummary(key, summary string) {
 		st.UpdatedAt = now
 		return a.SetState(st)
 	})
-	if err != nil {
-		warn("set summary", key, err)
-	}
 }
 
 // SetHistory replaces the window. The new messages take fresh sequence
 // numbers after the current NextSeq so seqs stay monotonic across rewrites;
 // SetHistory takes []spawnllm.Message, so there is no prior CreatedAt to carry
 // over and each message is stamped now.
-func (s *SQLiteStore) SetHistory(key string, history []spawnllm.Message) {
-	err := s.with(key, func(a *memory.ArchiveStore, _ *sessionHandle, _ memory.NoiseKeyFunc) error {
+func (s *SQLiteStore) SetHistory(key string, history []spawnllm.Message) error {
+	return s.with(key, func(a *memory.ArchiveStore, _ *sessionHandle, _ memory.NoiseKeyFunc) error {
 		st, err := state(a, key)
 		if err != nil {
 			return err
@@ -252,17 +250,34 @@ func (s *SQLiteStore) SetHistory(key string, history []spawnllm.Message) {
 		st.NextSeq = seq
 		return a.ReplaceWindow(stored, st)
 	})
-	if err != nil {
-		warn("set history", key, err)
+}
+
+// withStableSeqs prepares history for a seq-preserving window rewrite: a
+// message without a seq is minted one after the highest seen, and the
+// returned counter never goes below nextSeq, so seqs stay monotonic.
+func withStableSeqs(history []memory.StoredMessage, nextSeq int64) ([]memory.StoredMessage, int64) {
+	maxSeq := nextSeq
+	stored := make([]memory.StoredMessage, len(history))
+	for i, sm := range history {
+		if sm.Seq <= 0 {
+			maxSeq++
+			sm.Seq = maxSeq
+		}
+		if sm.Seq > maxSeq {
+			maxSeq = sm.Seq
+		}
+		stored[i] = memory.NewStoredMessageAt(sm.Seq, sm.Message, sm.CreatedAt)
 	}
+	return stored, maxSeq
 }
 
 // SetHistoryWithSeqs replaces the window while preserving stable seq numbers.
-// It is intended for compaction: retained tail messages keep the IDs already
-// advertised in summaries and written to the archive. Messages without a seq
-// are minted one after the highest seen; NextSeq never goes backwards.
-func (s *SQLiteStore) SetHistoryWithSeqs(key string, history []memory.StoredMessage) {
-	err := s.with(key, func(a *memory.ArchiveStore, _ *sessionHandle, _ memory.NoiseKeyFunc) error {
+// It is intended for eviction and for compaction on a store without
+// CommitCompaction: retained tail messages keep the IDs already advertised in
+// summaries and written to the archive. Messages without a seq are minted one
+// after the highest seen; NextSeq never goes backwards.
+func (s *SQLiteStore) SetHistoryWithSeqs(key string, history []memory.StoredMessage) error {
+	return s.with(key, func(a *memory.ArchiveStore, _ *sessionHandle, _ memory.NoiseKeyFunc) error {
 		st, err := state(a, key)
 		if err != nil {
 			return err
@@ -273,31 +288,47 @@ func (s *SQLiteStore) SetHistoryWithSeqs(key string, history []memory.StoredMess
 		}
 		st.UpdatedAt = now
 
-		maxSeq := st.NextSeq
-		stored := make([]memory.StoredMessage, len(history))
-		for i, sm := range history {
-			if sm.Seq <= 0 {
-				maxSeq++
-				sm.Seq = maxSeq
-			}
-			if sm.Seq > maxSeq {
-				maxSeq = sm.Seq
-			}
-			stored[i] = memory.NewStoredMessageAt(sm.Seq, sm.Message, sm.CreatedAt)
-		}
-		st.NextSeq = maxSeq
+		stored, next := withStableSeqs(history, st.NextSeq)
+		st.NextSeq = next
 		return a.ReplaceWindow(stored, st)
 	})
-	if err != nil {
-		warn("set history with seqs", key, err)
-	}
+}
+
+// CommitCompaction writes one compaction result in a single transaction: the
+// window (seqs preserved, as SetHistoryWithSeqs), the current summary when
+// c.Summary is set, the summary checkpoint when c.Checkpoint is set, and the
+// compaction counters after c.Compaction. A crash cannot leave the truncated
+// window beside a stale summary, or a checkpoint without the window it
+// describes.
+func (s *SQLiteStore) CommitCompaction(key string, c CompactionCommit) error {
+	return s.with(key, func(a *memory.ArchiveStore, _ *sessionHandle, _ memory.NoiseKeyFunc) error {
+		st, err := state(a, key)
+		if err != nil {
+			return err
+		}
+		now := time.Now()
+		if st.CreatedAt.IsZero() {
+			st.CreatedAt = now
+		}
+		st.UpdatedAt = now
+
+		stored, next := withStableSeqs(c.History, st.NextSeq)
+		st.NextSeq = next
+		if c.Summary != nil {
+			st.Summary = *c.Summary
+		}
+		if c.Compaction != nil {
+			c.Compaction(&st.Compaction)
+		}
+		return a.CommitCompaction(stored, st, c.Checkpoint)
+	})
 }
 
 // TruncateHistory keeps only the last keepLast window rows. keepLast <= 0 is a
 // full reset: the window is emptied and the compression counters cleared
 // (the archive is untouched — Manager.Reset preserves it by design).
-func (s *SQLiteStore) TruncateHistory(key string, keepLast int) {
-	err := s.with(key, func(a *memory.ArchiveStore, _ *sessionHandle, _ memory.NoiseKeyFunc) error {
+func (s *SQLiteStore) TruncateHistory(key string, keepLast int) error {
+	return s.with(key, func(a *memory.ArchiveStore, _ *sessionHandle, _ memory.NoiseKeyFunc) error {
 		st, err := state(a, key)
 		if err != nil {
 			return err
@@ -310,9 +341,6 @@ func (s *SQLiteStore) TruncateHistory(key string, keepLast int) {
 		st.UpdatedAt = time.Now()
 		return a.TruncateWindow(keepLast, st)
 	})
-	if err != nil {
-		warn("truncate history", key, err)
-	}
 }
 
 func (s *SQLiteStore) setPendingTurn(key string, pending bool) error {

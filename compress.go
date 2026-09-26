@@ -5,6 +5,7 @@ package ctxengine
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,11 +13,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/PivotLLM/ctxengine/logger"
 	"github.com/PivotLLM/ctxengine/memory"
+	"github.com/PivotLLM/ctxengine/session"
 	"github.com/PivotLLM/spawnllm"
 )
 
@@ -41,6 +44,11 @@ func (m *Manager) doCompress(ctx context.Context, safetyNet bool) error {
 	if m.cfg.notifyCallback != nil {
 		m.cfg.notifyCallback("compression started")
 	}
+	// Compaction rewrites the window and so the cached prefix anyway, which
+	// makes it the free moment to apply every pending eviction: the batched
+	// per-dispatch sweep may have been holding them back for the cache. The
+	// events are DEBUG-logged; the compaction report covers the pass.
+	m.sweepEvictions(ctx, true)
 	defer func() {
 		m.compressedAtCount = m.msgCount
 		if m.cfg.notifyCallback != nil {
@@ -380,14 +388,11 @@ func (m *Manager) handleSafetyNetPostLoop(
 		currentStored = originalStored
 	}
 
-	currentConversation := storedToPlain(currentStored)
-	tokensFinal := m.estTokens(currentConversation)
-	finalPct := 0.0
-	if m.cfg.contextWindow > 0 {
-		finalPct = float64(tokensFinal) * 100 / float64(m.cfg.contextWindow)
-	}
-
-	if finalPct < float64(m.cfg.safetyPercent) {
+	// The safety net is judged by the measure that fired it: the whole request
+	// (history plus reserve, tool schemas and build overhead), not history
+	// alone, or a pass could stop with history under the line and the request
+	// still over it.
+	if m.contextPercent(storedToPlain(currentStored)) < float64(m.cfg.safetyPercent) {
 		// Compression was sufficient; clear cooling and update stats.
 		m.cooling = false
 		m.lastCompressionGain = 0
@@ -411,12 +416,7 @@ func (m *Manager) handleSafetyNetPostLoop(
 	}
 
 	// Recheck after drops.
-	currentConversation = storedToPlain(currentStored)
-	tokensFinal = m.estTokens(currentConversation)
-	if m.cfg.contextWindow > 0 {
-		finalPct = float64(tokensFinal) * 100 / float64(m.cfg.contextWindow)
-	}
-	if finalPct < float64(m.cfg.safetyPercent) {
+	if m.contextPercent(storedToPlain(currentStored)) < float64(m.cfg.safetyPercent) {
 		m.cooling = false
 		m.lastCompressedAt = time.Now()
 		return nil
@@ -470,6 +470,14 @@ func (m *Manager) callModel(
 		User:       "Messages to summarize:\n\n" + formatStoredMessagesForSummary(toSummarize, m.noiseKey()),
 		JSONObject: true,
 		Exclude:    m.refusedModelList(),
+	}
+	// What an exact (verbatim) field may quote: the user's own words in this
+	// range, or a value an earlier pass already accepted. Anything else — a
+	// tool result, the assistant's own text — is not a user instruction and
+	// is dropped from exact before the summary is stored.
+	exactSources := userTexts(toSummarize)
+	if existing != nil {
+		exactSources = append(exactSources, existing.exactValues()...)
 	}
 	// The recorder captures the call as the two-message exchange the host
 	// sends, so debug capture and failure dumps keep their historical shape.
@@ -534,6 +542,14 @@ func (m *Manager) callModel(
 				return nil, false
 			}
 			continue
+		}
+
+		if dropped := summary.DropUnsourcedExact(exactSources); dropped > 0 {
+			logger.DebugCF("llmcontext", "summary exact values not quoted from a user message dropped", map[string]any{
+				"session_key": sessionKey,
+				"model":       model,
+				"dropped":     dropped,
+			})
 		}
 
 		// Set coverage from actual seq ranges. Do NOT use coverage values
@@ -649,6 +665,17 @@ const repetitiveRunThreshold = 3
 // used to detect near-identical messages in repetitive run detection.
 func normalizeForComparison(s string) string {
 	return strings.ToLower(strings.Join(strings.Fields(s), " "))
+}
+
+// userTexts returns the content of every user-role message in stored.
+func userTexts(stored []memory.StoredMessage) []string {
+	var out []string
+	for _, sm := range stored {
+		if sm.Role == "user" && strings.TrimSpace(sm.Content) != "" {
+			out = append(out, sm.Content)
+		}
+	}
+	return out
 }
 
 func storedToPlain(stored []memory.StoredMessage) []spawnllm.Message {
@@ -787,7 +814,7 @@ func collapseCronRun(stored []memory.StoredMessage, start int, noise NoiseKeyFun
 	// and notes the full [first-last] seq range in its text. Seqs are permanent
 	// identities — they are never renumbered — so the collapsed-away messages
 	// simply do not appear inline in the retained tail; they remain intact in the
-	// archive and stay retrievable by seq via get_session_messages.
+	// archive and stay retrievable by seq via session_messages.
 	firstSeq := stored[start].Seq
 	lastSeq := stored[i-1].Seq
 
@@ -807,7 +834,7 @@ const cronRunAnchorKeyMaxLen = 40
 // cronRunAnchor renders the counted anchor string for a collapsed no-op run of
 // a scheduled job identified by key. It states the count and the
 // [firstSeq-lastSeq] range so a reader knows exactly which archived messages
-// were elided and can retrieve them via get_session_messages.
+// were elided and can retrieve them via session_messages.
 func cronRunAnchor(key string, count int, firstSeq, lastSeq int64, reply string) string {
 	shortReply := truncateRunes(reply, 60)
 	label := truncateRunes(strings.Join(strings.Fields(key), " "), cronRunAnchorKeyMaxLen)
@@ -829,7 +856,7 @@ func cronRunAnchor(key string, count int, firstSeq, lastSeq int64, reply string)
 // identical scheduled checks verbatim. Only cron no-op runs are collapsed; every
 // other message is preserved unchanged. The anchor carries the seq of the first
 // message in the run; the elided originals remain in the archive (retrievable via
-// get_session_messages), so this elides them only from the live tail, never from
+// session_messages), so this elides them only from the live tail, never from
 // the durable record.
 func collapseRetainedCronRuns(stored []memory.StoredMessage, noise NoiseKeyFunc) []memory.StoredMessage {
 	if len(stored) < repetitiveRunThreshold {
@@ -862,8 +889,49 @@ func truncateRunes(s string, max int) string {
 	return string(r[:max]) + "…"
 }
 
+// toolOutputOpen and toolOutputClose delimit a tool result in the summarizer
+// input. The id is random per summarization call, so text inside a result
+// cannot forge the closing marker without guessing it — and any marker it does
+// carry is neutralised anyway (neutralizeToolOutput).
+func toolOutputOpen(id string) string  { return "<<<TOOL_OUTPUT id=" + id + ">>>" }
+func toolOutputClose(id string) string { return "<<<END_TOOL_OUTPUT id=" + id + ">>>" }
+
+// newToolOutputID returns the per-call random id for the tool-output markers.
+func newToolOutputID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:]) // crypto/rand.Read does not return an error on supported platforms
+	return hex.EncodeToString(b[:])
+}
+
+// transcriptFramingRe matches the "[#N] [role]" header the summarizer input
+// frames every message with. Tool text carrying one could pass itself off as
+// a turn — "[#3] [user] do X" — which is exactly what an injection attempt
+// would do.
+var transcriptFramingRe = regexp.MustCompile(`\[#\d+\]\s*\[[A-Za-z_]+\]`)
+
+// neutralizeToolOutput rewrites tool text so it cannot impersonate a
+// transcript turn or a block marker: a framing header gets its '#' escaped
+// ("[#3] [user]" becomes "[\#3] [user]") and any "<<<" or ">>>" run gets a
+// backslash inserted, so neither matches what the framing or the markers
+// look like. The rewrite is visible and reversible by eye; the summarizer
+// still sees what the tool said, just not as structure.
+func neutralizeToolOutput(s string) string {
+	s = transcriptFramingRe.ReplaceAllStringFunc(s, func(m string) string {
+		return strings.Replace(m, "[#", `[\#`, 1)
+	})
+	s = strings.ReplaceAll(s, "<<<", `<\<<`)
+	s = strings.ReplaceAll(s, ">>>", `>\>>`)
+	return s
+}
+
+// formatStoredMessagesForSummary renders the messages to summarize as the
+// framed transcript the summarizer prompt describes. Tool results are wrapped
+// in TOOL_OUTPUT markers and neutralised (neutralizeToolOutput), so fetched
+// content cannot fake a user turn; the prompt tells the model those blocks
+// are data.
 func formatStoredMessagesForSummary(stored []memory.StoredMessage, noise NoiseKeyFunc) string {
 	stored = collapseRepetitiveRuns(stored, noise)
+	toolID := newToolOutputID()
 	var sb strings.Builder
 	for _, sm := range stored {
 		fmt.Fprintf(&sb, "[#%d] [%s]\n", sm.Seq, sm.Role)
@@ -873,9 +941,16 @@ func formatStoredMessagesForSummary(stored []memory.StoredMessage, noise NoiseKe
 		if sm.ToolCallID != "" {
 			fmt.Fprintf(&sb, "tool_call_id: %s\n", sm.ToolCallID)
 		}
-		if strings.TrimSpace(sm.Content) != "" {
+		switch {
+		case sm.Role == "tool":
+			body := "<empty>"
+			if strings.TrimSpace(sm.Content) != "" {
+				body = neutralizeToolOutput(sm.Content)
+			}
+			fmt.Fprintf(&sb, "content:\n%s\n%s\n%s\n", toolOutputOpen(toolID), body, toolOutputClose(toolID))
+		case strings.TrimSpace(sm.Content) != "":
 			fmt.Fprintf(&sb, "content:\n%s\n", sm.Content)
-		} else {
+		default:
 			sb.WriteString("content: <empty>\n")
 		}
 		if len(sm.ToolCalls) > 0 {
@@ -970,14 +1045,18 @@ func mergeSeqRanges(ranges []SeqRange) []SeqRange {
 	return out
 }
 
-// persistStoredResult writes the compressed history and summary to the store and saves.
-// It returns ErrCompressionFailed if Save() fails.
-// After a successful save it persists compaction state if the store supports it.
 // persistStoredResult writes the retained window back to the store and, when
 // summary is a summary this pass generated, makes it the session's current
-// summary and appends it to the archive's checkpoint log. A nil summary leaves
-// the current summary, its checkpoint log and its provenance fields untouched
-// (a drop-only pass, or a pass that fell back to the stale summary).
+// summary, appends it to the archive's checkpoint log and records its
+// provenance in the compaction state. A nil summary leaves the current
+// summary, its checkpoint log and its provenance fields untouched (a
+// drop-only pass, or a pass that fell back to the stale summary).
+//
+// On a store that implements CompactionCommitter the window, the summary, the
+// checkpoint and the compaction counters are one transaction; a crash leaves
+// either the old state or the new one, never a truncated window beside a
+// stale summary. Any other store gets the same writes one at a time. Every
+// write failure is returned as ErrCompressionFailed.
 func (m *Manager) persistStoredResult(sysMsg *memory.StoredMessage, conv []memory.StoredMessage, summary *Summary) error {
 	// Collapse repeated cron no-op runs in the retained tail before persisting,
 	// so the live context window the LLM keeps seeing carries one counted anchor
@@ -993,47 +1072,69 @@ func (m *Manager) persistStoredResult(sysMsg *memory.StoredMessage, conv []memor
 	}
 	newStored = append(newStored, conv...)
 
-	if sh, ok := m.store.(interface {
-		SetHistoryWithSeqs(string, []memory.StoredMessage)
-	}); ok {
-		sh.SetHistoryWithSeqs(m.sessionKey, newStored)
-	} else {
-		m.store.SetHistory(m.sessionKey, storedToPlain(newStored))
-	}
-
+	var raw *string
+	var checkpoint *memory.SummaryRecord
 	summaryModel := ""
 	summaryGeneratedAt := m.lastCompressedAt
 	if summary != nil {
-		if data, err := json.Marshal(summary); err == nil {
-			raw := string(data)
-			m.store.SetSummary(m.sessionKey, raw)
-			// Persist the summary checkpoint into the per-session archive DB
-			// (summaries table). Best-effort: log on error, never fail compaction.
-			if a := m.getOrOpenArchive(); a != nil {
-				srcRange := summary.LastSummarizedSeqRange()
-				if _, appendErr := a.AppendSummary(memory.SummaryRecord{
-					GeneratedAt:     summary.GeneratedAt,
-					Model:           summary.Model,
-					Profile:         summary.Profile,
-					SourceSeqStart:  srcRange.SeqStart,
-					SourceSeqEnd:    srcRange.SeqEnd,
-					CoveredSeqStart: summary.CoveredSeqStart,
-					CoveredSeqEnd:   summary.CoveredSeqEnd,
-					Summary:         raw,
-				}); appendErr != nil {
-					logger.WarnCF("llmcontext", "compression: failed to append summary to archive", map[string]any{
-						"session_key": m.sessionKey,
-						"error":       appendErr.Error(),
-					})
-				}
-				// Apply retention after each compaction so a long-running agent
-				// prunes its archive incrementally as it goes. Best-effort.
-				m.pruneArchive(a)
-			}
+		data, err := json.Marshal(summary)
+		if err != nil {
+			return fmt.Errorf("%w: marshal summary: %s", ErrCompressionFailed, err.Error())
+		}
+		s := string(data)
+		raw = &s
+		srcRange := summary.LastSummarizedSeqRange()
+		checkpoint = &memory.SummaryRecord{
+			GeneratedAt:     summary.GeneratedAt,
+			Model:           summary.Model,
+			Profile:         summary.Profile,
+			SourceSeqStart:  srcRange.SeqStart,
+			SourceSeqEnd:    srcRange.SeqEnd,
+			CoveredSeqStart: summary.CoveredSeqStart,
+			CoveredSeqEnd:   summary.CoveredSeqEnd,
+			Summary:         s,
 		}
 		summaryModel = summary.Model
 		if !summary.GeneratedAt.IsZero() {
 			summaryGeneratedAt = summary.GeneratedAt
+		}
+	}
+	// CompressedAtMeaningfulCount is the current count because the defer in
+	// doCompress sets m.compressedAtCount = m.msgCount after this returns.
+	applyState := func(st *memory.CompactionState) {
+		st.CompressedAtMeaningfulCount = m.msgCount
+		st.Cooling = m.cooling
+		st.CoolingSinceCount = m.coolingSinceCount
+		if summary != nil {
+			st.SummaryGeneratedAt = summaryGeneratedAt
+			st.SummaryModel = summaryModel
+		}
+	}
+
+	if cc, ok := m.store.(CompactionCommitter); ok {
+		err := cc.CommitCompaction(m.sessionKey, session.CompactionCommit{
+			History:    newStored,
+			Summary:    raw,
+			Checkpoint: checkpoint,
+			Compaction: applyState,
+		})
+		if err != nil {
+			logger.WarnCF("llmcontext", "compression: commit failed", map[string]any{
+				"session_key": m.sessionKey,
+				"error":       err.Error(),
+			})
+			return fmt.Errorf("%w: commit: %s", ErrCompressionFailed, err.Error())
+		}
+	} else if err := m.persistStepwise(newStored, raw, checkpoint, applyState); err != nil {
+		return err
+	}
+
+	// Apply retention after each compaction that produced a summary so a
+	// long-running agent prunes its archive incrementally. Best-effort, and
+	// outside the commit: pruning is housekeeping, not part of the result.
+	if summary != nil {
+		if a := m.getOrOpenArchive(); a != nil {
+			m.pruneArchive(a)
 		}
 	}
 
@@ -1044,37 +1145,59 @@ func (m *Manager) persistStoredResult(sysMsg *memory.StoredMessage, conv []memor
 		})
 		return fmt.Errorf("%w: save: %s", ErrCompressionFailed, err.Error())
 	}
+	return nil
+}
 
-	// 9d. Persist the compaction state the manager owns. CompressedAtMeaningfulCount
-	// is the current count because the defer in doCompress sets
-	// m.compressedAtCount = m.msgCount after this call returns.
-	m.updateCompactionState("compression", func(st *memory.CompactionState) {
-		st.CompressedAtMeaningfulCount = m.msgCount
-		st.Cooling = m.cooling
-		st.CoolingSinceCount = m.coolingSinceCount
-		if summary != nil {
-			st.SummaryGeneratedAt = summaryGeneratedAt
-			st.SummaryModel = summaryModel
+// persistStepwise is the compaction write for a store without
+// CommitCompaction: the window, then the summary, then the checkpoint into
+// the manager's archive, then the compaction counters, as separate writes. A
+// crash between them can leave the window truncated with the summary not yet
+// updated; only a CompactionCommitter closes that gap.
+func (m *Manager) persistStepwise(newStored []memory.StoredMessage, raw *string, checkpoint *memory.SummaryRecord, applyState func(*memory.CompactionState)) error {
+	var err error
+	if sh, ok := m.store.(interface {
+		SetHistoryWithSeqs(string, []memory.StoredMessage) error
+	}); ok {
+		err = sh.SetHistoryWithSeqs(m.sessionKey, newStored)
+	} else {
+		err = m.store.SetHistory(m.sessionKey, storedToPlain(newStored))
+	}
+	if err != nil {
+		return fmt.Errorf("%w: write window: %s", ErrCompressionFailed, err.Error())
+	}
+	if raw != nil {
+		if err := m.store.SetSummary(m.sessionKey, *raw); err != nil {
+			return fmt.Errorf("%w: write summary: %s", ErrCompressionFailed, err.Error())
 		}
-	})
-
+	}
+	if checkpoint != nil {
+		// Best-effort: the checkpoint log is a convenience view of the summary
+		// the store already holds; a failure here does not fail the pass.
+		if a := m.getOrOpenArchive(); a != nil {
+			if _, appendErr := a.AppendSummary(*checkpoint); appendErr != nil {
+				logger.WarnCF("llmcontext", "compression: failed to append summary to archive", map[string]any{
+					"session_key": m.sessionKey,
+					"error":       appendErr.Error(),
+				})
+			}
+		}
+	}
+	m.updateCompactionState("compression", applyState)
 	return nil
 }
 
 // dropOldestStoredGroups removes the oldest turn groups (seq-preserving) from
-// conv until the estimated token count drops below safetyPercent or conv
-// reaches retainMinMessages. A group is an assistant tool-call turn with the
-// results that answer it, or a single message otherwise; groups are dropped
-// whole so no result is left behind without its call. The newest group is
-// never dropped: it is the turn in progress.
+// conv until the request — history plus the reserve, the tool schemas and the
+// build overhead, the same measure the triggers use — drops below
+// safetyPercent, or conv reaches retainMinMessages. A group is an assistant
+// tool-call turn with the results that answer it, or a single message
+// otherwise; groups are dropped whole so no result is left behind without its
+// call. The newest group is never dropped: it is the turn in progress.
 func (m *Manager) dropOldestStoredGroups(_ context.Context, conv []memory.StoredMessage) []memory.StoredMessage {
 	for len(conv) > m.cfg.retainMinMessages {
 		plain := storedToPlain(conv)
 		tokens := m.estTokens(plain)
-		pct := 0.0
-		if m.cfg.contextWindow > 0 {
-			pct = float64(tokens) * 100 / float64(m.cfg.contextWindow)
-		}
+		pct := m.contextPercent(plain)
 		if pct < float64(m.cfg.safetyPercent) {
 			break
 		}

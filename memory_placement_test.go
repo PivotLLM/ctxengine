@@ -38,9 +38,11 @@ func (m memMgr) Build(ctx context.Context) ([]spawnllm.Message, error) {
 }
 
 // TestRoutedMemory_RidesOnTheCurrentTurn is the placement this change exists
-// for. ROUTED is selected from the latest user message, so it must not sit in
-// the system message: that precedes the entire history, and anything volatile
-// there invalidates the cached prefix for all of it.
+// for. ROUTED is selected per turn, so it must not sit in the system message
+// (that precedes the entire history, and anything volatile there invalidates
+// the cached prefix for all of it) and it must not be folded into a stored
+// message (that rewrites the message on every dispatch). It is the trailing
+// user message, after the whole history.
 func TestRoutedMemory_RidesOnTheCurrentTurn(t *testing.T) {
 	store := newMockStore()
 	store.SetHistory("test-session", []spawnllm.Message{
@@ -62,15 +64,17 @@ func TestRoutedMemory_RidesOnTheCurrentTurn(t *testing.T) {
 	}
 
 	last := msgs[len(msgs)-1]
-	if last.Role != "user" || !strings.Contains(last.Content, "current question") {
-		t.Fatalf("expected the latest user turn last, got %+v", last)
+	if last.Role != "user" || last.Content != "ROUTEDBLOCK" {
+		t.Fatalf("expected the routed block as the trailing user message, got %+v", last)
 	}
-	if !strings.Contains(last.Content, "ROUTEDBLOCK") {
-		t.Errorf("routed memory should ride on the current turn, got:\n%s", last.Content)
+	// Every stored message is rendered exactly as stored.
+	if got := msgs[len(msgs)-2]; got.Role != "user" || got.Content != "current question" {
+		t.Errorf("the current user turn was altered: %+v", got)
 	}
-	// It must attach to the LATEST user turn, not an earlier one.
-	if strings.Contains(msgs[1].Content, "ROUTEDBLOCK") {
-		t.Error("routed memory attached to an older user turn")
+	for _, m := range msgs[1 : len(msgs)-1] {
+		if strings.Contains(m.Content, "ROUTEDBLOCK") {
+			t.Errorf("routed memory folded into a stored message: %+v", m)
+		}
 	}
 }
 
@@ -93,11 +97,14 @@ func TestRoutedMemory_NeverPersisted(t *testing.T) {
 			t.Fatalf("memory block leaked into stored history: %q", sm.Content)
 		}
 	}
+	if got := len(store.GetHistory("test-session")); got != 1 {
+		t.Fatalf("stored history grew to %d messages", got)
+	}
 }
 
 // TestRoutedMemory_StableAcrossRepeatedBuilds guards the cache property: the
-// same inputs must produce a byte-identical system message every time, or the
-// prefix breaks on every dispatch of the turn.
+// same inputs must produce a byte-identical slice every time, or the prefix
+// breaks on every dispatch of the turn.
 func TestRoutedMemory_StableAcrossRepeatedBuilds(t *testing.T) {
 	store := newMockStore()
 	store.SetHistory("test-session", []spawnllm.Message{{Role: "user", Content: "question"}})
@@ -106,21 +113,27 @@ func TestRoutedMemory_StableAcrossRepeatedBuilds(t *testing.T) {
 	first, _ := mgr.Build(context.Background())
 	second, _ := mgr.Build(context.Background())
 
-	if first[0].Content != second[0].Content {
-		t.Errorf("system message differs between builds:\n%q\nvs\n%q", first[0].Content, second[0].Content)
+	if len(first) != len(second) {
+		t.Fatalf("builds differ in length: %d vs %d", len(first), len(second))
+	}
+	for i := range first {
+		if first[i].Role != second[i].Role || first[i].Content != second[i].Content {
+			t.Errorf("message %d differs between builds:\n%q\nvs\n%q", i, first[i].Content, second[i].Content)
+		}
 	}
 	if got := strings.Count(second[len(second)-1].Content, "ROUTEDBLOCK"); got != 1 {
-		t.Errorf("routed block appended %d times on the second build, want 1", got)
+		t.Errorf("routed block appears %d times in the trailing message, want 1", got)
 	}
 }
 
-// TestRoutedMemory_NoUserTurnDropsBlock covers a turn that opens on tool
-// plumbing: with nowhere valid to put the block, dropping it beats forcing a
-// message shape a provider will reject. The next user turn re-routes it.
-func TestRoutedMemory_NoUserTurnDropsBlock(t *testing.T) {
+// TestRoutedMemory_AfterToolPlumbing covers a turn that opens on tool
+// plumbing: the block still goes at the end, as a user turn after the tool
+// result, a shape every provider accepts.
+func TestRoutedMemory_AfterToolPlumbing(t *testing.T) {
 	store := newMockStore()
 	store.SetHistory("test-session", []spawnllm.Message{
-		{Role: "assistant", Content: "thinking"},
+		{Role: "user", Content: "go"},
+		{Role: "assistant", ToolCalls: []spawnllm.ToolCall{{ID: "t1"}}},
 		{Role: "tool", ToolCallID: "t1", Content: "tool output"},
 	})
 
@@ -128,19 +141,23 @@ func TestRoutedMemory_NoUserTurnDropsBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	for _, m := range msgs {
-		if strings.Contains(m.Content, "ROUTEDBLOCK") {
-			t.Errorf("routed block should be dropped when there is no user turn, found in %s: %q", m.Role, m.Content)
-		}
+	assertRoles(t, msgs, "system", "user", "assistant", "tool", "user")
+	if msgs[4].Content != "ROUTEDBLOCK" || msgs[3].Content != "tool output" {
+		t.Errorf("routed block not appended after the tool result: %+v", msgs[3:])
 	}
 }
 
-// TestAttachRoutedMemory_EmptyIsNoop keeps a non-cognitive agent's slice
-// untouched.
-func TestAttachRoutedMemory_EmptyIsNoop(t *testing.T) {
-	msgs := []spawnllm.Message{{Role: "user", Content: "question"}}
-	attachRoutedMemory(msgs, "")
-	if msgs[0].Content != "question" {
-		t.Errorf("empty routed block modified the turn: %q", msgs[0].Content)
+// TestRoutedInjection_EmptyIsNoop keeps a non-cognitive agent's slice
+// untouched: no PlaceCurrentUser injection, no trailing message.
+func TestRoutedInjection_EmptyIsNoop(t *testing.T) {
+	if got := routedInjection([]Injection{{Placement: PlaceCurrentUser, Text: ""}, {Placement: PlaceSystemStable, Text: "S"}}); got != "" {
+		t.Errorf("routedInjection = %q, want empty", got)
 	}
+	store := newMockStore()
+	store.SetHistory("test-session", []spawnllm.Message{{Role: "user", Content: "question"}})
+	msgs, err := newMemMgr(t, store, "STABLEBLOCK", "").Build(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRoles(t, msgs, "system", "user")
 }

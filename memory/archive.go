@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,8 +141,9 @@ type SummaryMeta struct {
 // It supports FTS5 full-text search and efficient seq-range retrieval.
 //
 // The caller (ContextManager) is the sole writer. Readers open separate
-// read-only connections using the file:path?mode=ro DSN; WAL mode allows
-// concurrent readers without blocking the writer.
+// read-only connections (openReadOnly); WAL mode lets them read while the
+// writer writes, and the busy timeout in their DSN makes them wait out the
+// locks WAL does not exempt them from rather than fail at once.
 type ArchiveStore struct {
 	db          *sql.DB
 	path        string
@@ -160,6 +162,23 @@ func OpenReadOnly(path string) (*ArchiveStore, error) {
 		return &ArchiveStore{path: path, unavailable: true}, ErrArchiveUnavailable
 	}
 	return &ArchiveStore{path: path}, nil
+}
+
+// busyTimeoutMillis is how long a connection waits for a lock before failing
+// with SQLITE_BUSY. The writer sets it with a PRAGMA; readers carry it in
+// their DSN.
+const busyTimeoutMillis = 2000
+
+// openReadOnly opens a short-lived read-only connection to the database at
+// path. The busy timeout rides in the DSN so every connection the pool opens
+// has it, not only one that ran a PRAGMA. Without it a reader that meets a
+// lock — the writer switching journal mode on open, WAL recovery after a
+// crash, a checkpoint that needs the file, or a database still in rollback
+// mode — fails at once with "database is locked" instead of waiting for it
+// to clear. journal_mode is a property of the file the writer sets once, so
+// a reader does not set it.
+func openReadOnly(path string) (*sql.DB, error) {
+	return sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(%d)", path, busyTimeoutMillis))
 }
 
 // Open opens (or creates) an archive database at path.
@@ -183,7 +202,7 @@ func Open(path string) (*ArchiveStore, error) {
 			map[string]any{"path": path, "error": err.Error()})
 		return &ArchiveStore{path: path, unavailable: true}, ErrArchiveUnavailable
 	}
-	if _, err := db.Exec("PRAGMA busy_timeout=2000"); err != nil {
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", busyTimeoutMillis)); err != nil {
 		db.Close()
 		logger.WarnCF("memory", "archive busy_timeout failed",
 			map[string]any{"path": path, "error": err.Error()})
@@ -415,15 +434,20 @@ func (a *ArchiveStore) AppendSummary(rec SummaryRecord) (int64, error) {
 		return 0, nil
 	}
 
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return insertSummary(a.db, rec)
+}
+
+// insertSummary inserts one summaries row and returns its id. A zero
+// GeneratedAt is stamped now.
+func insertSummary(ex execer, rec SummaryRecord) (int64, error) {
 	genAt := rec.GeneratedAt
 	if genAt.IsZero() {
 		genAt = time.Now()
 	}
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	res, err := a.db.Exec(
+	res, err := ex.Exec(
 		`INSERT INTO summaries
 		    (generated_at, model, profile, source_seq_start, source_seq_end, covered_seq_start, covered_seq_end, summary)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -446,7 +470,7 @@ func (a *ArchiveStore) ListSummaries() ([]SummaryMeta, error) {
 		return nil, ErrArchiveUnavailable
 	}
 
-	db, err := sql.Open("sqlite", "file:"+a.path+"?mode=ro")
+	db, err := openReadOnly(a.path)
 	if err != nil {
 		return nil, err
 	}
@@ -493,7 +517,7 @@ func (a *ArchiveStore) GetSummary(id int64) (SummaryRecord, bool, error) {
 		return SummaryRecord{}, false, ErrArchiveUnavailable
 	}
 
-	db, err := sql.Open("sqlite", "file:"+a.path+"?mode=ro")
+	db, err := openReadOnly(a.path)
 	if err != nil {
 		return SummaryRecord{}, false, err
 	}
@@ -549,7 +573,7 @@ func (a *ArchiveStore) QueryRange(minSeq, maxSeq int64) ([]StoredMessage, error)
 		return nil, ErrArchiveUnavailable
 	}
 
-	db, err := sql.Open("sqlite", "file:"+a.path+"?mode=ro")
+	db, err := openReadOnly(a.path)
 	if err != nil {
 		return nil, err
 	}
@@ -590,7 +614,7 @@ func (a *ArchiveStore) Search(ctx context.Context, query, role string, limit int
 		limit = 100
 	}
 
-	db, err := sql.Open("sqlite", "file:"+a.path+"?mode=ro")
+	db, err := openReadOnly(a.path)
 	if err != nil {
 		return nil, err
 	}
@@ -622,7 +646,7 @@ func (a *ArchiveStore) Bounds() (minSeq, maxSeq int64, err error) {
 		return 0, 0, ErrArchiveUnavailable
 	}
 
-	db, err := sql.Open("sqlite", "file:"+a.path+"?mode=ro")
+	db, err := openReadOnly(a.path)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -644,7 +668,7 @@ func (a *ArchiveStore) Stats() (count int, first, last time.Time, err error) {
 		return 0, time.Time{}, time.Time{}, ErrArchiveUnavailable
 	}
 
-	db, err := sql.Open("sqlite", "file:"+a.path+"?mode=ro")
+	db, err := openReadOnly(a.path)
 	if err != nil {
 		return 0, time.Time{}, time.Time{}, err
 	}
@@ -674,7 +698,7 @@ func (a *ArchiveStore) MinSeqAfter(t time.Time) (int64, error) {
 		return 0, ErrArchiveUnavailable
 	}
 
-	db, err := sql.Open("sqlite", "file:"+a.path+"?mode=ro")
+	db, err := openReadOnly(a.path)
 	if err != nil {
 		return 0, err
 	}

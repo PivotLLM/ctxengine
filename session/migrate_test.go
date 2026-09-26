@@ -195,7 +195,7 @@ func TestMigrateJSONL_ProductionFixture(t *testing.T) {
 
 	// The store carries on from the migrated counter.
 	s := openStore(t, dir)
-	if seq := s.AddFullMessage(fixtureKey, spawnllm.Message{Role: "user", Content: "after"}); seq != 8 {
+	if seq := mustAdd(t, s, fixtureKey, spawnllm.Message{Role: "user", Content: "after"}); seq != 8 {
 		t.Errorf("seq after migration = %d, want 8", seq)
 	}
 	if got := len(s.GetHistory(fixtureKey)); got != 4 {
@@ -241,7 +241,7 @@ func TestMigrateJSONL_MetaOnlyAndLegacySeqs(t *testing.T) {
 		t.Errorf("legacy seqs = %+v", stored)
 	}
 	// NextSeq follows the highest assigned seq, so new messages never collide.
-	if seq := s.AddFullMessage("old", spawnllm.Message{Role: "user", Content: "four"}); seq != 5 {
+	if seq := mustAdd(t, s, "old", spawnllm.Message{Role: "user", Content: "four"}); seq != 5 {
 		t.Errorf("seq after legacy migration = %d, want 5", seq)
 	}
 }

@@ -106,6 +106,7 @@ func e2eOpts(dir string, caller ModelCaller, extra ...Option) []Option {
 		WithModelCaller(caller),
 		WithContextWindow(3000),
 		WithOverheadTokens(0),
+		WithTokenSafetyMargin(1.0), // the tests below reason in exact tokens
 		WithMinPercent(20),
 		WithNormalPercent(50),
 		WithSafetyPercent(80),
@@ -392,7 +393,8 @@ func TestE2E_FullLoopCompactsOnRealStore(t *testing.T) {
 		}
 	}
 
-	// The post-compaction system message: layer, summary block, layer — once.
+	// The post-compaction system message: both layers, then the summary data
+	// block — once.
 	last := s.assemblies[len(s.assemblies)-1].Messages
 	if last[0].Role != "system" {
 		t.Fatalf("messages[0].Role = %q, want system", last[0].Role)
@@ -407,29 +409,28 @@ func TestE2E_FullLoopCompactsOnRealStore(t *testing.T) {
 		t.Fatalf("RenderedSummary() = %q", rendered)
 	}
 	sys := last[0].Content
-	prefix, suffix := e2eLayerBefore+systemSeparator, systemSeparator+e2eLayerAfter
-	if !strings.HasPrefix(sys, prefix) || !strings.HasSuffix(sys, suffix) {
-		t.Fatalf("system message is not layer/summary/layer:\n%s", sys)
+	prefix := e2eLayerBefore + systemSeparator + e2eLayerAfter + systemSeparator
+	if !strings.HasPrefix(sys, prefix) {
+		t.Fatalf("system message does not open with the two layers:\n%s", sys)
 	}
-	middle := strings.TrimSuffix(strings.TrimPrefix(sys, prefix), suffix)
-	if !strings.HasPrefix(middle, "CONTEXT_SUMMARY:") || !strings.HasSuffix(middle, rendered) {
-		t.Fatalf("the block between the layers is not the rendered summary:\n%s", middle)
+	block := strings.TrimPrefix(sys, prefix)
+	if !strings.HasPrefix(block, summaryDataOpen+"\n"+summaryDataHeader) || !strings.HasSuffix(block, rendered+"\n"+summaryDataClose) {
+		t.Fatalf("the block after the layers is not the rendered summary as a data block:\n%s", block)
 	}
-	if strings.Count(sys, "CONTEXT_SUMMARY:") != 1 {
-		t.Errorf("summary block appears %d times", strings.Count(sys, "CONTEXT_SUMMARY:"))
+	if strings.Count(sys, summaryDataOpen) != 1 {
+		t.Errorf("summary block appears %d times", strings.Count(sys, summaryDataOpen))
 	}
 	assertWellFormed(t, last)
 
-	// The injection rode on the last user message of the built slice only.
-	lastUser := -1
-	for i := len(last) - 1; i >= 0; i-- {
-		if last[i].Role == "user" {
-			lastUser = i
-			break
-		}
+	// The injection is the trailing user message of the built slice, and only
+	// that: no stored message carries it.
+	if tail := last[len(last)-1]; tail.Role != "user" || tail.Content != e2eInjection {
+		t.Fatalf("injection is not the trailing user message: %+v", tail)
 	}
-	if lastUser < 0 || !strings.HasSuffix(last[lastUser].Content, systemSeparator+e2eInjection) {
-		t.Fatalf("injection not folded into the last user message: %q", last[lastUser].Content)
+	for _, m := range last[:len(last)-1] {
+		if strings.Contains(m.Content, e2eInjection) {
+			t.Fatalf("injection leaked into an earlier message: %+v", m)
+		}
 	}
 	db := e2eDB(t, dir)
 	for _, table := range []string{"messages", "window"} {
@@ -632,6 +633,7 @@ func tightOpts(dir string, caller ModelCaller) []Option {
 		WithModelCaller(caller),
 		WithContextWindow(1300),
 		WithOverheadTokens(0),
+		WithTokenSafetyMargin(1.0), // exact-token reasoning, as in e2eOpts
 		WithMinPercent(20),
 		WithNormalPercent(50),
 		WithSafetyPercent(80),
@@ -684,8 +686,8 @@ func TestE2E_WellFormedAfterSafetyNetCompaction(t *testing.T) {
 	if srcStart != 1 || srcEnd != 6 {
 		t.Errorf("summary source range #%d-#%d, want #1-#6", srcStart, srcEnd)
 	}
-	if got := len(asm.Messages); got != 4 {
-		t.Errorf("built %d messages, want system + #7-#9", got)
+	if got := len(asm.Messages); got != 5 {
+		t.Errorf("built %d messages, want system + #7-#9 + the trailing injection", got)
 	}
 }
 
@@ -740,9 +742,9 @@ func TestE2E_WellFormedAfterSafetyNetDrop(t *testing.T) {
 	if n := queryInt(t, e2eDB(t, dir), "SELECT count(*) FROM summaries"); n != 0 {
 		t.Errorf("summaries rows = %d, want 0 (no model succeeded)", n)
 	}
-	// The built slice carries only the clean tail.
-	if got := len(asm.Messages); got != 4 {
-		t.Errorf("built %d messages, want system + #7-#9", got)
+	// The built slice carries only the clean tail (plus the trailing injection).
+	if got := len(asm.Messages); got != 5 {
+		t.Errorf("built %d messages, want system + #7-#9 + the trailing injection", got)
 	}
 }
 
@@ -779,8 +781,8 @@ func TestE2E_WellFormedAfterForceCompress(t *testing.T) {
 		t.Errorf("Assemble after ForceCompress rewrote history again: %+v", asm)
 	}
 	assertWellFormed(t, asm.Messages)
-	if got := len(asm.Messages); got != 4 {
-		t.Errorf("built %d messages, want system + 3", got)
+	if got := len(asm.Messages); got != 5 {
+		t.Errorf("built %d messages, want system + 3 + the trailing injection", got)
 	}
 }
 
@@ -894,9 +896,11 @@ func TestE2E_EvictionObservedThroughAssemble(t *testing.T) {
 	ctx := context.Background()
 	store := e2eStore(t, dir)
 	defer store.Close()
+	// A 20k-token window: the default batch threshold (5% of the window in
+	// bytes, 4000 here) is under the 5000-byte read, so the sweep applies it.
 	mgr := New(e2eKey, store,
 		WithArchiveDir(dir),
-		WithContextWindow(100_000),
+		WithContextWindow(20_000),
 		WithMessageThreshold(0),
 		WithModelCaller(&e2eSummarizer{model: "e2e-model"}),
 	).(*Manager)
@@ -934,7 +938,7 @@ func TestE2E_EvictionObservedThroughAssemble(t *testing.T) {
 	if ev.Seq != readSeq || ev.Tool != "file_read_bytes" || ev.Resource != path || ev.Bytes != len(content) || ev.Reason != "stale" || ev.AgeTurns <= 10 {
 		t.Errorf("eviction event = %+v", ev)
 	}
-	placeholder := evictionPlaceholder("file_read_bytes", path, len(content))
+	placeholder := evictionPlaceholder("file_read_bytes", path, len(content), readSeq)
 
 	// The built slice carries the placeholder in the tool result's slot.
 	found := false

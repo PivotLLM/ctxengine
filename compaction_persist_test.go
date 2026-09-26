@@ -27,12 +27,15 @@ func newPersistentMockStore() *persistentMockStore {
 
 // AddFullMessage advances the meaningful count the way a real compaction-state
 // store does: the store owns the count and the manager reads it back.
-func (s *persistentMockStore) AddFullMessage(sessionKey string, msg spawnllm.Message) int64 {
-	seq := s.mockStore.AddFullMessage(sessionKey, msg)
+func (s *persistentMockStore) AddFullMessage(sessionKey string, msg spawnllm.Message) (int64, error) {
+	seq, err := s.mockStore.AddFullMessage(sessionKey, msg)
+	if err != nil {
+		return 0, err
+	}
 	st := s.states[sessionKey]
 	st.MeaningfulCount++
 	s.states[sessionKey] = st
-	return seq
+	return seq, nil
 }
 
 func (s *persistentMockStore) GetCompactionState(sessionKey string) (memory.CompactionState, error) {

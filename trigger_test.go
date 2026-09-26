@@ -26,13 +26,14 @@ func newMockStore() *mockStore {
 	}
 }
 
-func (s *mockStore) AddMessage(sessionKey, role, content string) {
+func (s *mockStore) AddMessage(sessionKey, role, content string) error {
 	s.history[sessionKey] = append(s.history[sessionKey], spawnllm.Message{Role: role, Content: content})
+	return nil
 }
 
-func (s *mockStore) AddFullMessage(sessionKey string, msg spawnllm.Message) int64 {
+func (s *mockStore) AddFullMessage(sessionKey string, msg spawnllm.Message) (int64, error) {
 	s.history[sessionKey] = append(s.history[sessionKey], msg)
-	return int64(len(s.history[sessionKey]))
+	return int64(len(s.history[sessionKey])), nil
 }
 
 func (s *mockStore) GetHistory(key string) []spawnllm.Message {
@@ -45,24 +46,30 @@ func (s *mockStore) GetHistory(key string) []spawnllm.Message {
 	return cp
 }
 
-func (s *mockStore) GetSummary(key string) string   { return s.summary[key] }
-func (s *mockStore) SetSummary(key, summary string) { s.summary[key] = summary }
-func (s *mockStore) SetHistory(key string, h []spawnllm.Message) {
+func (s *mockStore) GetSummary(key string) string { return s.summary[key] }
+func (s *mockStore) SetSummary(key, summary string) error {
+	s.summary[key] = summary
+	return nil
+}
+
+func (s *mockStore) SetHistory(key string, h []spawnllm.Message) error {
 	cp := make([]spawnllm.Message, len(h))
 	copy(cp, h)
 	s.history[key] = cp
+	return nil
 }
 
-func (s *mockStore) TruncateHistory(key string, keepLast int) {
+func (s *mockStore) TruncateHistory(key string, keepLast int) error {
 	h := s.history[key]
 	if keepLast <= 0 {
 		s.history[key] = nil
-		return
+		return nil
 	}
 	if keepLast >= len(h) {
-		return
+		return nil
 	}
 	s.history[key] = h[len(h)-keepLast:]
+	return nil
 }
 func (s *mockStore) SetPendingTurn(_ string) error            { return nil }
 func (s *mockStore) ClearPendingTurn(_ string) error          { return nil }
@@ -87,7 +94,9 @@ func newTestManager(store session.SessionStore, opts ...Option) *Manager {
 	// and the real 4000-token reserve would dominate every one of them. Tests
 	// that care about the reserve pass WithOverheadTokens explicitly — options
 	// are applied in order, so a later one wins.
-	cm := New("test-session", store, append([]Option{WithOverheadTokens(0)}, opts...)...)
+	// The safety margin is pinned to 1.0 for the same reason: these tests
+	// reason in exact tokens. token_calibration_test.go covers the margin.
+	cm := New("test-session", store, append([]Option{WithOverheadTokens(0), WithTokenSafetyMargin(1.0)}, opts...)...)
 	return cm.(*Manager)
 }
 

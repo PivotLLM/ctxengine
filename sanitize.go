@@ -8,20 +8,34 @@ import (
 	"github.com/PivotLLM/spawnllm"
 )
 
-// sanitizeHistoryForProvider drops what a strict provider would reject from a
-// stored history before it is sent. The unit of validity is the tool group: an
-// assistant turn that makes tool calls, followed by the results that answer
-// them. A group is kept whole when every call is answered and the turn follows
-// a user or tool message; otherwise the turn and its results go together. A
-// result that answers no call in its group, or that sits outside any group, is
-// dropped on its own, and stored system messages are always dropped because
-// build composes the single system message itself.
+// interruptedToolResult is the content of the result the sanitiser synthesises
+// for a tool call that has no stored result. It tells the model the call was
+// issued and may well have run, so it does not repeat a side-effecting call
+// on the strength of a missing answer.
+const interruptedToolResult = "[interrupted — the gateway restarted before this tool call finished; " +
+	"outcome unknown. Do not assume it did not run.]"
+
+// sanitizeHistoryForProvider repairs what a strict provider would reject from
+// a stored history before it is sent. The unit of validity is the tool group:
+// an assistant turn that makes tool calls, followed by the results that answer
+// them. A group is kept when the turn follows a user or tool message; a call
+// in it with no result gets a synthesised interruptedToolResult so the group
+// is complete and the model knows the call was made. A result that answers no
+// call in its group, or that sits outside any group, is dropped on its own; a
+// group whose turn follows a plain assistant message is dropped whole; and
+// stored system messages are always dropped because build composes the single
+// system message itself.
 //
-// Compaction and eviction can leave any of these shapes behind (a boundary
-// that cuts a group in half, a collapsed turn whose results remain), and
-// tolerant providers accept them silently, so a history can be malformed for a
-// long time before a strict one answers 400 on every turn. Sanitising on every
-// dispatch means such a session recovers by itself.
+// An unanswered call is what a crash between the assistant write and the
+// tool-result writes leaves behind. Dropping the group would hide from the
+// model that the tools already ran, and it would run them again — the very
+// thing to avoid for a side-effecting tool — so the group stays and the gap
+// is labelled instead. The other shapes come from compaction and eviction (a
+// boundary that cuts a group in half, a collapsed turn whose results remain);
+// tolerant providers accept them silently, so a history can be malformed for
+// a long time before a strict one answers 400 on every turn. Sanitising on
+// every dispatch means such a session recovers by itself. The result is a new
+// slice; the stored history and its seqs are never touched.
 func sanitizeHistoryForProvider(history []spawnllm.Message) []spawnllm.Message {
 	if len(history) == 0 {
 		return history
@@ -44,14 +58,15 @@ func sanitizeHistoryForProvider(history []spawnllm.Message) []spawnllm.Message {
 			g := collectToolGroup(history[i:])
 			i += g.span
 			drops.strayResult += g.strays
-			switch {
-			case len(out) == 0 || (out[len(out)-1].Role != "user" && out[len(out)-1].Role != "tool"):
+			if len(out) == 0 || (out[len(out)-1].Role != "user" && out[len(out)-1].Role != "tool") {
 				drops.badPredecessor++
-			case !g.complete:
-				drops.incompleteGroup++
-			default:
-				out = append(out, g.msgs...)
+				continue
 			}
+			out = append(out, g.msgs...)
+			for _, id := range g.unanswered {
+				out = append(out, spawnllm.Message{Role: "tool", ToolCallID: id, Content: interruptedToolResult})
+			}
+			drops.synthesized += len(g.unanswered)
 		default:
 			out = append(out, msg)
 			i++
@@ -64,10 +79,10 @@ func sanitizeHistoryForProvider(history []spawnllm.Message) []spawnllm.Message {
 
 // toolGroup is one assistant tool-call turn with the results that answer it.
 type toolGroup struct {
-	msgs     []spawnllm.Message // the turn, then the results that answer one of its calls
-	span     int                // history entries the group covers, strays included
-	strays   int                // results in the group that answer none of its calls
-	complete bool               // every call has at least one result
+	msgs       []spawnllm.Message // the turn, then the results that answer one of its calls
+	span       int                // history entries the group covers, strays included
+	strays     int                // results in the group that answer none of its calls
+	unanswered []string           // call IDs with no result, in the order the turn made them
 }
 
 // collectToolGroup gathers the group starting at history[0], which must be an
@@ -94,35 +109,36 @@ func collectToolGroup(history []spawnllm.Message) toolGroup {
 		g.msgs = append(g.msgs, m)
 	}
 
-	g.complete = true
-	for _, ok := range answered {
-		if !ok {
-			g.complete = false
-			break
+	for _, tc := range turn.ToolCalls {
+		if !answered[tc.ID] {
+			g.unanswered = append(g.unanswered, tc.ID)
+			answered[tc.ID] = true // a turn that repeats an ID gets one result for it
 		}
 	}
 	return g
 }
 
-// sanitizeDrops counts what was removed, by reason, so one summary line is
-// logged per dispatch: a single compaction boundary can orphan several
-// leading turns, and a line per message would repeat on every dispatch.
+// sanitizeDrops counts what was removed, by reason, and what was synthesised,
+// so one summary line is logged per dispatch: a single compaction boundary can
+// orphan several leading turns, and a line per message would repeat on every
+// dispatch.
 type sanitizeDrops struct {
-	system, orphanResult, strayResult, badPredecessor, incompleteGroup int
+	system, orphanResult, strayResult, badPredecessor int
+	synthesized                                       int // interrupted results added to complete a group
 }
 
 func (d sanitizeDrops) log(kept int) {
-	n := d.system + d.orphanResult + d.strayResult + d.badPredecessor + d.incompleteGroup
-	if n == 0 {
+	n := d.system + d.orphanResult + d.strayResult + d.badPredecessor
+	if n == 0 && d.synthesized == 0 {
 		return
 	}
 	logger.DebugCF("llmcontext", "sanitized history for provider", map[string]any{
-		"dropped_total":         n,
-		"system":                d.system,
-		"orphan_result":         d.orphanResult,
-		"stray_result":          d.strayResult,
-		"bad_predecessor":       d.badPredecessor,
-		"incomplete_tool_group": d.incompleteGroup,
-		"kept":                  kept,
+		"dropped_total":       n,
+		"system":              d.system,
+		"orphan_result":       d.orphanResult,
+		"stray_result":        d.strayResult,
+		"bad_predecessor":     d.badPredecessor,
+		"synthesized_results": d.synthesized,
+		"kept":                kept,
 	})
 }

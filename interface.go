@@ -42,8 +42,9 @@ type Layer struct {
 	Name string
 	// Text is the block itself. An empty Text is skipped.
 	Text string
-	// AfterSummary places the layer after the rendered summary block instead
-	// of before it.
+	// AfterSummary orders the layer after the layers without it. The summary
+	// itself is rendered last, as a data block after every layer and stable
+	// injection, so this only orders layers relative to each other.
 	AfterSummary bool
 }
 
@@ -55,8 +56,8 @@ type AssembleRequest struct {
 	// measure the real request rather than stored history alone.
 	ToolDefinitionTokens int
 	// Layers are the host's system-prompt blocks for this dispatch, in order.
-	// Layers with AfterSummary unset precede the rendered summary; the rest
-	// follow it.
+	// Layers with AfterSummary unset come first, then the rest; the rendered
+	// summary follows all of them as a data block.
 	Layers []Layer
 	// Injections are placed into the built slice in order.
 	Injections []Injection
@@ -75,6 +76,11 @@ type Assembly struct {
 	Evictions []EvictionEvent
 	// Compacted reports that a safety-net compaction ran during this call.
 	Compacted bool
+	// PromptTokenEstimate is the engine's raw estimate — no safety margin — of
+	// the prompt tokens in Messages plus the tool schemas the caller declared.
+	// Hand it back with the provider's reported prompt tokens through
+	// ObserveUsage so the estimate calibrates itself to the model in use.
+	PromptTokenEstimate int
 }
 
 // Changed reports whether stored history was rewritten by this call, by
@@ -114,6 +120,10 @@ type ContextManager interface {
 	// stored history, after it on the built request), and places the
 	// injections. It is safe to call once per iteration of a tool-using turn.
 	Assemble(ctx context.Context, req AssembleRequest) (Assembly, error)
+	// ObserveUsage reports the provider's prompt token count for a request
+	// built by Assemble, against that Assembly's PromptTokenEstimate, so the
+	// engine's token estimate calibrates itself to the model in use.
+	ObserveUsage(estimatedPromptTokens, actualPromptTokens int)
 
 	// Compact triggers a normal LLM-based compression pass on demand.
 	Compact(ctx context.Context) error

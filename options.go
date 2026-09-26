@@ -47,7 +47,19 @@ const (
 	defaultMaxCompressIterations = 3
 	defaultOverheadTokens        = 4000
 	defaultCharsPerToken         = 4.0
-	defaultTokenSafetyMargin     = 1.0
+	// defaultTokenSafetyMargin inflates the chars/4 estimate. The heuristic
+	// runs low on code, JSON and non-English text, and an under-estimate lets
+	// a request past the safety line; 15% covers the typical shortfall. It is
+	// also the floor under the runtime calibration (Manager.ObserveUsage).
+	defaultTokenSafetyMargin = 1.15
+
+	// Runtime calibration of the token estimate from provider-reported prompt
+	// tokens (Manager.ObserveUsage): the EWMA weight of a new observation, the
+	// observations needed before the calibrated ratio replaces the static
+	// margin, and the ceiling on the ratio.
+	calibrationAlpha           = 0.3
+	calibrationMinObservations = 3
+	calibrationMaxMargin       = 2.0
 
 	// defaultTriggerDays fires compaction once the oldest message in the live
 	// window is older than this many days, regardless of how little of the
@@ -138,7 +150,7 @@ type managerConfig struct {
 	charsPerToken float64
 	// tokenSafetyMargin multiplies the token estimate so it errs high. A value
 	// of 1.1 inflates the estimate by 10%, triggering compression slightly
-	// earlier. Default: 1.0 (no inflation).
+	// earlier. Default: 1.15. The floor under the calibrated ratio.
 	tokenSafetyMargin float64
 	// archiveContentMaxBytes caps per-message content stored in the archive.
 	// 0 (the default) resolves to archiveContentMaxBytes at write time.
@@ -149,6 +161,9 @@ type managerConfig struct {
 	// can be delivered to the user. The manual /compact path returns the report
 	// directly instead and does not use this callback.
 	reportCallback func(channel, chatID, text string)
+	// breakerTrippedHook, when set, is invoked once each time the compaction
+	// failure circuit breaker trips for this session.
+	breakerTrippedHook func(sessionKey string, failures int)
 	// compactDebug enables verbatim request/response capture of each
 	// summarization LLM invocation to <compressionProfileDir>/compact.jsonl.
 	compactDebug bool
@@ -168,6 +183,10 @@ type managerConfig struct {
 	// eviction is the per-turn tool-result eviction policy. Defaults to
 	// DefaultEvictionPolicy() (enabled); override via WithEvictionPolicy.
 	eviction EvictionPolicy
+	// evictionRoles says which tools are re-retrievable readers and which are
+	// writers. Defaults to DefaultEvictionRoles(); override via
+	// WithEvictionRoles.
+	evictionRoles EvictionRoles
 }
 
 func defaultManagerConfig() managerConfig {
@@ -187,7 +206,18 @@ func defaultManagerConfig() managerConfig {
 		charsPerToken:       defaultCharsPerToken,
 		tokenSafetyMargin:   defaultTokenSafetyMargin,
 		eviction:            DefaultEvictionPolicy(),
+		evictionRoles:       DefaultEvictionRoles(),
 	}
+}
+
+// WithEvictionRoles sets which tools the eviction sweep treats as
+// re-retrievable readers and as writers, replacing DefaultEvictionRoles. A
+// host populates it from its tool metadata; to extend rather than replace the
+// defaults, start from DefaultEvictionRoles() and add to its maps. Names are
+// the bare tool names the host publishes; an "mcp__server__" prefix on a call
+// is stripped before lookup.
+func WithEvictionRoles(r EvictionRoles) Option {
+	return func(c *managerConfig) { c.evictionRoles = r }
 }
 
 // WithEvictionPolicy sets the per-turn tool-result eviction policy. The agent
@@ -338,6 +368,16 @@ func WithCompactionReporter(fn func(channel, chatID, text string)) Option {
 	return func(c *managerConfig) { c.reportCallback = fn }
 }
 
+// WithBreakerTrippedHook sets the callback invoked when the compaction failure
+// circuit breaker trips: defaultMaxConsecutiveCompactFailures consecutive
+// automatic compactions failed and the normal-trigger path is now suppressed
+// for the session. It fires once per trip with the session key and the
+// failure count, so the host can raise an alert. The hook runs under the
+// manager's lock and must not call back into the same manager.
+func WithBreakerTrippedHook(fn func(sessionKey string, failures int)) Option {
+	return func(c *managerConfig) { c.breakerTrippedHook = fn }
+}
+
 // WithCompactDebug enables verbatim capture of each summarization request and
 // response to <workspace>/compact.jsonl. Debugging only; off by default.
 func WithCompactDebug(enabled bool) Option {
@@ -357,7 +397,9 @@ func WithCharsPerToken(v float64) Option {
 
 // WithTokenSafetyMargin sets the multiplier applied to every token estimate so
 // it errs high, triggering compression earlier. A value of 1.1 inflates the
-// estimate by 10%. Values <= 0 are ignored and the default (1.0) is retained.
+// estimate by 10%. Values <= 0 are ignored and the default (1.15) is retained.
+// It is the floor: once ObserveUsage has enough observations the calibrated
+// ratio is used instead, but never below this value.
 func WithTokenSafetyMargin(v float64) Option {
 	return func(c *managerConfig) {
 		if v > 0 {

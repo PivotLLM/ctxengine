@@ -85,7 +85,8 @@ func TestAssemble_BuiltRequestPastSafetyCompacts(t *testing.T) {
 }
 
 // TestAssemble_InjectionsPlacedAndNeverPersisted: stable rides in the system
-// message, per-turn on the latest user message, and neither reaches the store.
+// message, per-turn as the trailing user message after the stored history,
+// and neither reaches the store.
 func TestAssemble_InjectionsPlacedAndNeverPersisted(t *testing.T) {
 	store := newMockStore()
 	store.SetHistory("test-session", []spawnllm.Message{
@@ -106,8 +107,11 @@ func TestAssemble_InjectionsPlacedAndNeverPersisted(t *testing.T) {
 		t.Fatalf("system message = %q", asm.Messages[0].Content)
 	}
 	last := asm.Messages[len(asm.Messages)-1]
-	if last.Role != "user" || !strings.Contains(last.Content, "ROUTED") || !strings.Contains(last.Content, "current") {
-		t.Fatalf("last message = %+v", last)
+	if last.Role != "user" || last.Content != "ROUTED" {
+		t.Fatalf("last message = %+v, want the routed block alone", last)
+	}
+	if current := asm.Messages[len(asm.Messages)-2]; current.Content != "current" {
+		t.Fatalf("the stored user turn was altered: %+v", current)
 	}
 	for _, h := range store.GetHistory("test-session") {
 		if strings.Contains(h.Content, "STABLE") || strings.Contains(h.Content, "ROUTED") {
