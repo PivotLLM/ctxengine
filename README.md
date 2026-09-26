@@ -114,12 +114,20 @@ own: the archive imports it into `summaries` the first time it is opened.
   info closures) if the model should be able to reach the archive.
 
 
-## Testing
+## Building and testing
 
 ```
-make test    # the whole suite under the race detector; exits non-zero on any failure
-make check   # gofmt and go vet gates, then make test
+make         # make test, then make build (only if the tests pass)
+make test    # the one gate: format check, go vet, golangci-lint, go test -race; prints a summary
+make build   # compile every package (a library: nothing is produced)
+make clean   # drop the Go test cache
+make fmt     # rewrite formatting (the gate only verifies it)
 ```
+
+`make test` runs `./test.sh` and exits non-zero if any stage fails. It needs
+[golangci-lint](https://golangci-lint.run) v2 on `PATH` or in `$(go env GOPATH)/bin`
+and says how to install it when it is missing; it never installs anything. It
+does not modify the working tree; `./test.sh --keep` preserves its logs.
 
 The suite covers each part on its own and the engine as a whole: `e2e_test.go`
 drives conversations through the real SQLite store and archive, compacts them

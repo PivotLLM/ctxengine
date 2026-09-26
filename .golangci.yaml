@@ -1,0 +1,214 @@
+# ctxengine lint configuration, adapted from ClawEh's .golangci.yaml (the house
+# config). The disabled-linter list and its reasons are the house decisions and
+# are carried over as they are; the counts quoted beside them were measured on
+# ClawEh. Settings that only made sense for ClawEh's code were dropped, and the
+# exclusions that remain are explained against this repository's code.
+version: "2"
+
+linters:
+  default: all
+  disable:
+    # TODO: Tweak for current project needs
+    - containedctx
+    - cyclop
+    - depguard
+    - dupword
+    - gomodguard
+    - err113
+    - exhaustruct
+    - exhaustruct_v5
+    - funcorder
+    - gochecknoglobals
+    - godot
+    - intrange
+    - ireturn
+    - nlreturn
+    - noctx
+    - noinlineerr
+    - nonamedreturns
+    - tagliatelle
+    - testpackage
+    - varnamelen
+    - wrapcheck
+    - wsl
+    - wsl_v5
+
+    # Not adopted (decision, 2026-09-19). Counts are what each reported when
+    # measured; they are here so nobody re-measures to re-open the question.
+    #
+    # paralleltest (2272), goconst (1480), lll (489), mnd (316), tagalign (125):
+    #   volume style opinions the project does not hold.
+    # forbidigo (257): the CLI commands print by design.
+    # revive with enable-all-rules (~1970): needs a curated rule set to be
+    #   useful; enable-all is not a signal.
+    # gochecknoinits (10): every hit is a channel's init.go self-registering
+    #   with the channel registry (plus logger). That is the plugin pattern the
+    #   package layout is built on.
+    # godox (2): both hits are prose comments where line wrapping put the word
+    #   "bug" at the start of a line, not work items.
+    - forbidigo
+    - gochecknoinits
+    - goconst
+    - godox
+    - lll
+    - mnd
+    - paralleltest
+    - revive
+    - tagalign
+
+    # Still open. Each is its own branch, because each changes signatures or
+    # restructures functions rather than fixing a line:
+    #
+    # funlen (20), gocyclo (3), gocognit (54), nestif (49), maintidx (10):
+    #   complexity; the agent loop and installers dominate.
+    # unparam (25): unused parameters and always-nil returns kept for interface
+    #   symmetry; every fix is a signature change.
+    # nilnil (10): each production hit needs a sentinel error, an API change.
+    # embeddedstructfieldcheck (30), testifylint (98): mechanical, one pass each.
+    - embeddedstructfieldcheck
+    - funlen
+    - gocognit
+    - gocyclo
+    - maintidx
+    - nestif
+    - nilnil
+    - testifylint
+    - unparam
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    exhaustive:
+      default-signifies-exhaustive: true
+    funlen:
+      lines: 120
+      statements: 40
+    gocognit:
+      min-complexity: 25
+    gocritic:
+      disabled-checks:
+        # Style-only, and Go's own stdlib uses if/else chains freely. Rewriting
+        # 14 of them would be churn without changing behaviour; the checks that
+        # find real problems (badCall, appendAssign, exitAfterDefer, …) stay on.
+        - ifElseChain
+        - elseif
+    gocyclo:
+      min-complexity: 20
+    gosec:
+      excludes:
+        # G104 (unhandled errors) is the same check as errcheck; one linter
+        # is enough for it.
+        - G104
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    lll:
+      line-length: 120
+      tab-width: 4
+    modernize:
+      # omitzero on nested struct and time fields would start omitting
+      # zero-valued ranges and timestamps from the summary and session-state
+      # JSON persisted in every archive; omitempty is a no-op there today and
+      # that stored format is a contract.
+      disable:
+        - omitzero
+        # newexpr rewrites toolspec.Allow(true) to new(true). Allow is the
+        # toolspec API's documented way to set DefaultAllow and says what the
+        # pointer means; new(true) does not.
+        - newexpr
+    misspell:
+      # No locale. Canadian English takes British -our/-re ("behaviour",
+      # "centre") but American -ize ("synthesized"), so neither US nor UK fits:
+      # US flagged 111 Commonwealth spellings, UK flagged 416 -ize endings.
+      # Unset, misspell reports only unambiguous typos, which is what we want.
+      locale: ""
+    mnd:
+      checks:
+        - argument
+        - assign
+        - case
+        - condition
+        - operation
+        - return
+    nakedret:
+      max-func-lines: 3
+    revive:
+      enable-all-rules: true
+      rules:
+        - name: add-constant
+          disabled: true
+        - name: argument-limit
+          arguments:
+            - 7
+          severity: warning
+        - name: banned-characters
+          disabled: true
+        - name: cognitive-complexity
+          disabled: true
+        - name: comment-spacings
+          arguments:
+            - nolint
+          severity: warning
+        - name: cyclomatic
+          disabled: true
+        - name: file-header
+          disabled: true
+        - name: function-result-limit
+          arguments:
+            - 3
+          severity: warning
+        - name: function-length
+          disabled: true
+        - name: line-length-limit
+          disabled: true
+        - name: max-public-structs
+          disabled: true
+        - name: modifies-value-receiver
+          disabled: true
+        - name: package-comments
+          disabled: true
+        - name: unused-receiver
+          disabled: true
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - lll
+        source: '^//go:generate '
+      - linters:
+          - funlen
+          - maintidx
+          - gocognit
+          - gocyclo
+        path: _test\.go$
+      # Tests read their own fixtures, run fixed commands and use fake keys;
+      # gosec on them is noise that would need a directive per line.
+      - linters:
+          - gosec
+        path: _test\.go$
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - localmodule
+      custom-order: true
+    gofmt:
+      simplify: true
+      rewrite-rules:
+        - pattern: "interface{}"
+          replacement: "any"
+        - pattern: "a[b:len(a)]"
+          replacement: "a[b:]"
