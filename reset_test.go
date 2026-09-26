@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/PivotLLM/ctxengine/memory"
+	"github.com/PivotLLM/ctxengine/session"
 	"github.com/PivotLLM/spawnllm"
 )
 
@@ -229,23 +230,7 @@ func (s *clearPendingTrackingStore) ClearPendingTurn(_ string) error {
 }
 
 // newResetManagerWithStore constructs a Manager using any SessionStore.
-func newResetManagerWithStore(store interface {
-	AddMessage(sessionKey, role, content string)
-	AddFullMessage(sessionKey string, msg spawnllm.Message) int64
-	GetHistory(key string) []spawnllm.Message
-	GetHistoryWithSeqs(key string) []memory.StoredMessage
-	GetSummary(key string) string
-	SetSummary(key, summary string)
-	SetHistory(key string, history []spawnllm.Message)
-	TruncateHistory(key string, keepLast int)
-	SetPendingTurn(sessionKey string) error
-	ClearPendingTurn(sessionKey string) error
-	GetArchiveBounds(sessionKey string) (int64, int64)
-	ListPendingSessions() ([]string, error)
-	Save(key string) error
-	Close() error
-}, sessionKey string, opts ...Option,
-) *Manager {
+func newResetManagerWithStore(store session.SessionStore, sessionKey string, opts ...Option) *Manager {
 	baseOpts := []Option{
 		WithContextWindow(10000),
 		WithNormalPercent(90),

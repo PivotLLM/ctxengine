@@ -17,6 +17,7 @@ import (
 
 	"github.com/PivotLLM/ctxengine/logger"
 	"github.com/PivotLLM/ctxengine/memory"
+	"github.com/PivotLLM/ctxengine/session"
 	"github.com/PivotLLM/spawnllm"
 )
 
@@ -380,14 +381,11 @@ func (m *Manager) handleSafetyNetPostLoop(
 		currentStored = originalStored
 	}
 
-	currentConversation := storedToPlain(currentStored)
-	tokensFinal := m.estTokens(currentConversation)
-	finalPct := 0.0
-	if m.cfg.contextWindow > 0 {
-		finalPct = float64(tokensFinal) * 100 / float64(m.cfg.contextWindow)
-	}
-
-	if finalPct < float64(m.cfg.safetyPercent) {
+	// The safety net is judged by the measure that fired it: the whole request
+	// (history plus reserve, tool schemas and build overhead), not history
+	// alone, or a pass could stop with history under the line and the request
+	// still over it.
+	if m.contextPercent(storedToPlain(currentStored)) < float64(m.cfg.safetyPercent) {
 		// Compression was sufficient; clear cooling and update stats.
 		m.cooling = false
 		m.lastCompressionGain = 0
@@ -411,12 +409,7 @@ func (m *Manager) handleSafetyNetPostLoop(
 	}
 
 	// Recheck after drops.
-	currentConversation = storedToPlain(currentStored)
-	tokensFinal = m.estTokens(currentConversation)
-	if m.cfg.contextWindow > 0 {
-		finalPct = float64(tokensFinal) * 100 / float64(m.cfg.contextWindow)
-	}
-	if finalPct < float64(m.cfg.safetyPercent) {
+	if m.contextPercent(storedToPlain(currentStored)) < float64(m.cfg.safetyPercent) {
 		m.cooling = false
 		m.lastCompressedAt = time.Now()
 		return nil
@@ -970,14 +963,18 @@ func mergeSeqRanges(ranges []SeqRange) []SeqRange {
 	return out
 }
 
-// persistStoredResult writes the compressed history and summary to the store and saves.
-// It returns ErrCompressionFailed if Save() fails.
-// After a successful save it persists compaction state if the store supports it.
 // persistStoredResult writes the retained window back to the store and, when
 // summary is a summary this pass generated, makes it the session's current
-// summary and appends it to the archive's checkpoint log. A nil summary leaves
-// the current summary, its checkpoint log and its provenance fields untouched
-// (a drop-only pass, or a pass that fell back to the stale summary).
+// summary, appends it to the archive's checkpoint log and records its
+// provenance in the compaction state. A nil summary leaves the current
+// summary, its checkpoint log and its provenance fields untouched (a
+// drop-only pass, or a pass that fell back to the stale summary).
+//
+// On a store that implements CompactionCommitter the window, the summary, the
+// checkpoint and the compaction counters are one transaction; a crash leaves
+// either the old state or the new one, never a truncated window beside a
+// stale summary. Any other store gets the same writes one at a time. Every
+// write failure is returned as ErrCompressionFailed.
 func (m *Manager) persistStoredResult(sysMsg *memory.StoredMessage, conv []memory.StoredMessage, summary *Summary) error {
 	// Collapse repeated cron no-op runs in the retained tail before persisting,
 	// so the live context window the LLM keeps seeing carries one counted anchor
@@ -993,47 +990,69 @@ func (m *Manager) persistStoredResult(sysMsg *memory.StoredMessage, conv []memor
 	}
 	newStored = append(newStored, conv...)
 
-	if sh, ok := m.store.(interface {
-		SetHistoryWithSeqs(string, []memory.StoredMessage)
-	}); ok {
-		sh.SetHistoryWithSeqs(m.sessionKey, newStored)
-	} else {
-		m.store.SetHistory(m.sessionKey, storedToPlain(newStored))
-	}
-
+	var raw *string
+	var checkpoint *memory.SummaryRecord
 	summaryModel := ""
 	summaryGeneratedAt := m.lastCompressedAt
 	if summary != nil {
-		if data, err := json.Marshal(summary); err == nil {
-			raw := string(data)
-			m.store.SetSummary(m.sessionKey, raw)
-			// Persist the summary checkpoint into the per-session archive DB
-			// (summaries table). Best-effort: log on error, never fail compaction.
-			if a := m.getOrOpenArchive(); a != nil {
-				srcRange := summary.LastSummarizedSeqRange()
-				if _, appendErr := a.AppendSummary(memory.SummaryRecord{
-					GeneratedAt:     summary.GeneratedAt,
-					Model:           summary.Model,
-					Profile:         summary.Profile,
-					SourceSeqStart:  srcRange.SeqStart,
-					SourceSeqEnd:    srcRange.SeqEnd,
-					CoveredSeqStart: summary.CoveredSeqStart,
-					CoveredSeqEnd:   summary.CoveredSeqEnd,
-					Summary:         raw,
-				}); appendErr != nil {
-					logger.WarnCF("llmcontext", "compression: failed to append summary to archive", map[string]any{
-						"session_key": m.sessionKey,
-						"error":       appendErr.Error(),
-					})
-				}
-				// Apply retention after each compaction so a long-running agent
-				// prunes its archive incrementally as it goes. Best-effort.
-				m.pruneArchive(a)
-			}
+		data, err := json.Marshal(summary)
+		if err != nil {
+			return fmt.Errorf("%w: marshal summary: %s", ErrCompressionFailed, err.Error())
+		}
+		s := string(data)
+		raw = &s
+		srcRange := summary.LastSummarizedSeqRange()
+		checkpoint = &memory.SummaryRecord{
+			GeneratedAt:     summary.GeneratedAt,
+			Model:           summary.Model,
+			Profile:         summary.Profile,
+			SourceSeqStart:  srcRange.SeqStart,
+			SourceSeqEnd:    srcRange.SeqEnd,
+			CoveredSeqStart: summary.CoveredSeqStart,
+			CoveredSeqEnd:   summary.CoveredSeqEnd,
+			Summary:         s,
 		}
 		summaryModel = summary.Model
 		if !summary.GeneratedAt.IsZero() {
 			summaryGeneratedAt = summary.GeneratedAt
+		}
+	}
+	// CompressedAtMeaningfulCount is the current count because the defer in
+	// doCompress sets m.compressedAtCount = m.msgCount after this returns.
+	applyState := func(st *memory.CompactionState) {
+		st.CompressedAtMeaningfulCount = m.msgCount
+		st.Cooling = m.cooling
+		st.CoolingSinceCount = m.coolingSinceCount
+		if summary != nil {
+			st.SummaryGeneratedAt = summaryGeneratedAt
+			st.SummaryModel = summaryModel
+		}
+	}
+
+	if cc, ok := m.store.(CompactionCommitter); ok {
+		err := cc.CommitCompaction(m.sessionKey, session.CompactionCommit{
+			History:    newStored,
+			Summary:    raw,
+			Checkpoint: checkpoint,
+			Compaction: applyState,
+		})
+		if err != nil {
+			logger.WarnCF("llmcontext", "compression: commit failed", map[string]any{
+				"session_key": m.sessionKey,
+				"error":       err.Error(),
+			})
+			return fmt.Errorf("%w: commit: %s", ErrCompressionFailed, err.Error())
+		}
+	} else if err := m.persistStepwise(newStored, raw, checkpoint, applyState); err != nil {
+		return err
+	}
+
+	// Apply retention after each compaction that produced a summary so a
+	// long-running agent prunes its archive incrementally. Best-effort, and
+	// outside the commit: pruning is housekeeping, not part of the result.
+	if summary != nil {
+		if a := m.getOrOpenArchive(); a != nil {
+			m.pruneArchive(a)
 		}
 	}
 
@@ -1044,37 +1063,59 @@ func (m *Manager) persistStoredResult(sysMsg *memory.StoredMessage, conv []memor
 		})
 		return fmt.Errorf("%w: save: %s", ErrCompressionFailed, err.Error())
 	}
+	return nil
+}
 
-	// 9d. Persist the compaction state the manager owns. CompressedAtMeaningfulCount
-	// is the current count because the defer in doCompress sets
-	// m.compressedAtCount = m.msgCount after this call returns.
-	m.updateCompactionState("compression", func(st *memory.CompactionState) {
-		st.CompressedAtMeaningfulCount = m.msgCount
-		st.Cooling = m.cooling
-		st.CoolingSinceCount = m.coolingSinceCount
-		if summary != nil {
-			st.SummaryGeneratedAt = summaryGeneratedAt
-			st.SummaryModel = summaryModel
+// persistStepwise is the compaction write for a store without
+// CommitCompaction: the window, then the summary, then the checkpoint into
+// the manager's archive, then the compaction counters, as separate writes. A
+// crash between them can leave the window truncated with the summary not yet
+// updated; only a CompactionCommitter closes that gap.
+func (m *Manager) persistStepwise(newStored []memory.StoredMessage, raw *string, checkpoint *memory.SummaryRecord, applyState func(*memory.CompactionState)) error {
+	var err error
+	if sh, ok := m.store.(interface {
+		SetHistoryWithSeqs(string, []memory.StoredMessage) error
+	}); ok {
+		err = sh.SetHistoryWithSeqs(m.sessionKey, newStored)
+	} else {
+		err = m.store.SetHistory(m.sessionKey, storedToPlain(newStored))
+	}
+	if err != nil {
+		return fmt.Errorf("%w: write window: %s", ErrCompressionFailed, err.Error())
+	}
+	if raw != nil {
+		if err := m.store.SetSummary(m.sessionKey, *raw); err != nil {
+			return fmt.Errorf("%w: write summary: %s", ErrCompressionFailed, err.Error())
 		}
-	})
-
+	}
+	if checkpoint != nil {
+		// Best-effort: the checkpoint log is a convenience view of the summary
+		// the store already holds; a failure here does not fail the pass.
+		if a := m.getOrOpenArchive(); a != nil {
+			if _, appendErr := a.AppendSummary(*checkpoint); appendErr != nil {
+				logger.WarnCF("llmcontext", "compression: failed to append summary to archive", map[string]any{
+					"session_key": m.sessionKey,
+					"error":       appendErr.Error(),
+				})
+			}
+		}
+	}
+	m.updateCompactionState("compression", applyState)
 	return nil
 }
 
 // dropOldestStoredGroups removes the oldest turn groups (seq-preserving) from
-// conv until the estimated token count drops below safetyPercent or conv
-// reaches retainMinMessages. A group is an assistant tool-call turn with the
-// results that answer it, or a single message otherwise; groups are dropped
-// whole so no result is left behind without its call. The newest group is
-// never dropped: it is the turn in progress.
+// conv until the request — history plus the reserve, the tool schemas and the
+// build overhead, the same measure the triggers use — drops below
+// safetyPercent, or conv reaches retainMinMessages. A group is an assistant
+// tool-call turn with the results that answer it, or a single message
+// otherwise; groups are dropped whole so no result is left behind without its
+// call. The newest group is never dropped: it is the turn in progress.
 func (m *Manager) dropOldestStoredGroups(_ context.Context, conv []memory.StoredMessage) []memory.StoredMessage {
 	for len(conv) > m.cfg.retainMinMessages {
 		plain := storedToPlain(conv)
 		tokens := m.estTokens(plain)
-		pct := 0.0
-		if m.cfg.contextWindow > 0 {
-			pct = float64(tokens) * 100 / float64(m.cfg.contextWindow)
-		}
+		pct := m.contextPercent(plain)
 		if pct < float64(m.cfg.safetyPercent) {
 			break
 		}

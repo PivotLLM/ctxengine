@@ -27,23 +27,29 @@ func (s *compressTestStore) GetHistory(_ string) []spawnllm.Message {
 	return cp
 }
 
-func (s *compressTestStore) SetHistory(_ string, h []spawnllm.Message) {
+func (s *compressTestStore) SetHistory(_ string, h []spawnllm.Message) error {
 	cp := make([]spawnllm.Message, len(h))
 	copy(cp, h)
 	s.history = cp
+	return nil
 }
 
-func (s *compressTestStore) GetSummary(_ string) string                        { return s.summary }
-func (s *compressTestStore) SetSummary(_, v string)                            { s.summary = v }
-func (s *compressTestStore) Save(_ string) error                               { return nil }
-func (s *compressTestStore) AddMessage(_, _, _ string)                         {}
-func (s *compressTestStore) AddFullMessage(_ string, _ spawnllm.Message) int64 { return 0 }
-func (s *compressTestStore) TruncateHistory(_ string, _ int)                   {}
-func (s *compressTestStore) SetPendingTurn(_ string) error                     { return nil }
-func (s *compressTestStore) ClearPendingTurn(_ string) error                   { return nil }
-func (s *compressTestStore) GetArchiveBounds(_ string) (int64, int64)          { return 0, 0 }
-func (s *compressTestStore) ListPendingSessions() ([]string, error)            { return nil, nil }
-func (s *compressTestStore) Close() error                                      { return nil }
+func (s *compressTestStore) GetSummary(_ string) string { return s.summary }
+func (s *compressTestStore) SetSummary(_, v string) error {
+	s.summary = v
+	return nil
+}
+func (s *compressTestStore) Save(_ string) error             { return nil }
+func (s *compressTestStore) AddMessage(_, _, _ string) error { return nil }
+func (s *compressTestStore) AddFullMessage(_ string, _ spawnllm.Message) (int64, error) {
+	return 0, nil
+}
+func (s *compressTestStore) TruncateHistory(_ string, _ int) error    { return nil }
+func (s *compressTestStore) SetPendingTurn(_ string) error            { return nil }
+func (s *compressTestStore) ClearPendingTurn(_ string) error          { return nil }
+func (s *compressTestStore) GetArchiveBounds(_ string) (int64, int64) { return 0, 0 }
+func (s *compressTestStore) ListPendingSessions() ([]string, error)   { return nil, nil }
+func (s *compressTestStore) Close() error                             { return nil }
 func (s *compressTestStore) GetHistoryWithSeqs(_ string) []memory.StoredMessage {
 	stored := make([]memory.StoredMessage, len(s.history))
 	for i, msg := range s.history {

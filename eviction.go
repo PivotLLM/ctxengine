@@ -639,17 +639,26 @@ func (m *Manager) sweepEvictions(_ context.Context) []EvictionEvent {
 		})
 	}
 
-	// Persist, preserving seqs when the store supports it.
+	// Persist, preserving seqs when the store supports it. A failed write
+	// means nothing was evicted, so nothing is reported.
+	var err error
 	if sh, ok := m.store.(interface {
-		SetHistoryWithSeqs(string, []memory.StoredMessage)
+		SetHistoryWithSeqs(string, []memory.StoredMessage) error
 	}); ok {
-		sh.SetHistoryWithSeqs(m.sessionKey, stored)
+		err = sh.SetHistoryWithSeqs(m.sessionKey, stored)
 	} else {
 		plain := make([]spawnllm.Message, len(stored))
 		for i := range stored {
 			plain[i] = stored[i].Message
 		}
-		m.store.SetHistory(m.sessionKey, plain)
+		err = m.store.SetHistory(m.sessionKey, plain)
+	}
+	if err != nil {
+		logger.WarnCF("llmcontext", "eviction persist failed; nothing evicted", map[string]any{
+			"session_key": m.sessionKey,
+			"error":       err.Error(),
+		})
+		return nil
 	}
 	if err := m.store.Save(m.sessionKey); err != nil {
 		logger.WarnCF("llmcontext", "eviction save failed", map[string]any{

@@ -316,19 +316,50 @@ func (a *ArchiveStore) AppendWindow(msg StoredMessage, st SessionState) error {
 	})
 }
 
+// replaceWindow deletes every window row and inserts msgs.
+func replaceWindow(ex execer, msgs []StoredMessage) error {
+	if _, err := ex.Exec(`DELETE FROM window`); err != nil {
+		return err
+	}
+	for _, msg := range msgs {
+		if err := insertWindow(ex, msg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ReplaceWindow replaces every window row with msgs and writes st, in one
 // transaction.
 func (a *ArchiveStore) ReplaceWindow(msgs []StoredMessage, st SessionState) error {
 	return a.withTx(func(tx *sql.Tx) error {
-		if _, err := tx.Exec(`DELETE FROM window`); err != nil {
+		if err := replaceWindow(tx, msgs); err != nil {
 			return err
 		}
-		for _, msg := range msgs {
-			if err := insertWindow(tx, msg); err != nil {
+		return writeState(tx, st)
+	})
+}
+
+// CommitCompaction writes one compaction result in a single transaction: the
+// window is replaced with msgs, st (carrying the new summary and counters) is
+// written, and checkpoint, when non-nil, is appended to summaries. Either all
+// of it is durable or none of it is, so a crash cannot leave a truncated
+// window beside a stale summary, or a checkpoint for a window that was never
+// written.
+func (a *ArchiveStore) CommitCompaction(msgs []StoredMessage, st SessionState, checkpoint *SummaryRecord) error {
+	return a.withTx(func(tx *sql.Tx) error {
+		if err := replaceWindow(tx, msgs); err != nil {
+			return err
+		}
+		if err := writeState(tx, st); err != nil {
+			return err
+		}
+		if checkpoint != nil {
+			if _, err := insertSummary(tx, *checkpoint); err != nil {
 				return err
 			}
 		}
-		return writeState(tx, st)
+		return nil
 	})
 }
 

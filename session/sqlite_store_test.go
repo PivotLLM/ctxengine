@@ -24,6 +24,16 @@ func newStore(t *testing.T) *SQLiteStore {
 	return openStore(t, t.TempDir())
 }
 
+// mustAdd appends msg and returns its seq, failing the test on a write error.
+func mustAdd(t *testing.T, s *SQLiteStore, key string, msg spawnllm.Message) int64 {
+	t.Helper()
+	seq, err := s.AddFullMessage(key, msg)
+	if err != nil {
+		t.Fatalf("AddFullMessage(%s): %v", key, err)
+	}
+	return seq
+}
+
 func openStore(t *testing.T, dir string) *SQLiteStore {
 	t.Helper()
 	s, err := NewSQLiteStore(dir)
@@ -77,10 +87,10 @@ func TestAddFullMessage_ToolCallsRoundTrip(t *testing.T) {
 			{ID: "tc1", Function: &spawnllm.FunctionCall{Name: "read_file", Arguments: `{"path":"x"}`}},
 		},
 	}
-	if seq := s.AddFullMessage("s1", msg); seq != 1 {
-		t.Errorf("seq = %d, want 1", seq)
+	if seq, err := s.AddFullMessage("s1", msg); seq != 1 || err != nil {
+		t.Errorf("seq = %d, err = %v, want 1", seq, err)
 	}
-	s.AddFullMessage("s1", spawnllm.Message{Role: "tool", Content: "ok", ToolCallID: "tc1"})
+	mustAdd(t, s, "s1", spawnllm.Message{Role: "tool", Content: "ok", ToolCallID: "tc1"})
 
 	history := s.GetHistory("s1")
 	if len(history) != 2 {
@@ -97,7 +107,7 @@ func TestAddFullMessage_ToolCallsRoundTrip(t *testing.T) {
 func TestSeqMinting(t *testing.T) {
 	s := newStore(t)
 	for i := 1; i <= 5; i++ {
-		if seq := s.AddFullMessage("seq", spawnllm.Message{Role: "user", Content: "msg"}); seq != int64(i) {
+		if seq := mustAdd(t, s, "seq", spawnllm.Message{Role: "user", Content: "msg"}); seq != int64(i) {
 			t.Errorf("AddFullMessage(%d) seq = %d", i, seq)
 		}
 	}
@@ -120,7 +130,7 @@ func TestSeqMinting(t *testing.T) {
 	if len(stored) != 3 || stored[0].Seq != 3 || stored[2].Seq != 5 {
 		t.Fatalf("after truncate: %+v", stored)
 	}
-	if seq := s.AddFullMessage("seq", spawnllm.Message{Role: "user", Content: "after"}); seq != 6 {
+	if seq := mustAdd(t, s, "seq", spawnllm.Message{Role: "user", Content: "after"}); seq != 6 {
 		t.Errorf("seq after truncate = %d, want 6", seq)
 	}
 }
@@ -129,7 +139,7 @@ func TestAddMessage_StampsCreatedAt(t *testing.T) {
 	s := newStore(t)
 	before := time.Now().UTC()
 	s.AddMessage("stamp", "user", "hello")
-	s.AddFullMessage("stamp", spawnllm.Message{Role: "assistant", Content: "hi"})
+	mustAdd(t, s, "stamp", spawnllm.Message{Role: "assistant", Content: "hi"})
 	after := time.Now().UTC()
 
 	stored := s.GetHistoryWithSeqs("stamp")
@@ -242,7 +252,7 @@ func TestTruncateHistory(t *testing.T) {
 		t.Errorf("ActiveModelIndex should survive a reset, got %d", st.ActiveModelIndex)
 	}
 	// Seqs keep counting after a full reset.
-	if seq := s.AddFullMessage("trunc", spawnllm.Message{Role: "user", Content: "next"}); seq != 11 {
+	if seq := mustAdd(t, s, "trunc", spawnllm.Message{Role: "user", Content: "next"}); seq != 11 {
 		t.Errorf("seq after reset = %d, want 11", seq)
 	}
 }
@@ -274,7 +284,7 @@ func TestSetHistory_ReplacesWithFreshSeqs(t *testing.T) {
 			t.Errorf("stored[%d].CreatedAt = %v not stamped now", i, m.CreatedAt)
 		}
 	}
-	if seq := s.AddFullMessage("replace", spawnllm.Message{Role: "user", Content: "x"}); seq != 8 {
+	if seq := mustAdd(t, s, "replace", spawnllm.Message{Role: "user", Content: "x"}); seq != 8 {
 		t.Errorf("next seq = %d, want 8", seq)
 	}
 }
@@ -295,7 +305,7 @@ func TestSetHistoryWithSeqs_PreservesStableSeqs(t *testing.T) {
 	if !stored[0].CreatedAt.Equal(tail[0].CreatedAt) {
 		t.Errorf("CreatedAt not carried over: %v vs %v", stored[0].CreatedAt, tail[0].CreatedAt)
 	}
-	if seq := s.AddFullMessage("preserve", spawnllm.Message{Role: "assistant", Content: "next"}); seq != 6 {
+	if seq := mustAdd(t, s, "preserve", spawnllm.Message{Role: "assistant", Content: "next"}); seq != 6 {
 		t.Errorf("next seq = %d, want 6", seq)
 	}
 }
@@ -312,7 +322,7 @@ func TestSetHistoryWithSeqs_NextSeqMonotonic(t *testing.T) {
 	s.SetHistoryWithSeqs("mono", []memory.StoredMessage{
 		memory.NewStoredMessage(1, spawnllm.Message{Role: "user", Content: "one"}),
 	})
-	if seq := s.AddFullMessage("mono", spawnllm.Message{Role: "user", Content: "six"}); seq != 6 {
+	if seq := mustAdd(t, s, "mono", spawnllm.Message{Role: "user", Content: "six"}); seq != 6 {
 		t.Errorf("seq after low rewrite = %d, want 6", seq)
 	}
 
@@ -328,7 +338,7 @@ func TestSetHistoryWithSeqs_NextSeqMonotonic(t *testing.T) {
 	if stored[1].CreatedAt.IsZero() {
 		t.Error("minted message should be stamped")
 	}
-	if seq := s.AddFullMessage("mono", spawnllm.Message{Role: "user", Content: "x"}); seq != 11 {
+	if seq := mustAdd(t, s, "mono", spawnllm.Message{Role: "user", Content: "x"}); seq != 11 {
 		t.Errorf("seq after mint = %d, want 11", seq)
 	}
 }
@@ -421,8 +431,10 @@ func TestCompactionState_RoundTripAcrossReopen(t *testing.T) {
 func TestPersistence_AcrossInstances(t *testing.T) {
 	dir := t.TempDir()
 	s1 := openStore(t, dir)
-	seq := s1.AddFullMessage("persist", spawnllm.Message{Role: "user", Content: "remember me"})
-	s1.SetSummary("persist", "a test session")
+	seq := mustAdd(t, s1, "persist", spawnllm.Message{Role: "user", Content: "remember me"})
+	if err := s1.SetSummary("persist", "a test session"); err != nil {
+		t.Fatalf("SetSummary: %v", err)
+	}
 	s1.Close()
 
 	s2 := openStore(t, dir)
@@ -433,7 +445,7 @@ func TestPersistence_AcrossInstances(t *testing.T) {
 	if got := s2.GetSummary("persist"); got != "a test session" {
 		t.Errorf("summary = %q", got)
 	}
-	if next := s2.AddFullMessage("persist", spawnllm.Message{Role: "assistant", Content: "ok"}); next != seq+1 {
+	if next := mustAdd(t, s2, "persist", spawnllm.Message{Role: "assistant", Content: "ok"}); next != seq+1 {
 		t.Errorf("seq after reopen = %d, want %d", next, seq+1)
 	}
 }

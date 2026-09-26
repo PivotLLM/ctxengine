@@ -268,13 +268,27 @@ func (m *Manager) updateCompactionState(op string, apply func(st *memory.Compact
 	}
 }
 
+// addMessage writes msg to the store and, once it has a seq, to the archive,
+// and advances the message count. A store write failure is returned and
+// nothing else happens: an unstored message must not be archived or counted.
+func (m *Manager) addMessage(op string, msg spawnllm.Message) (int64, error) {
+	seq, err := m.store.AddFullMessage(m.sessionKey, msg)
+	if err != nil {
+		return 0, fmt.Errorf("llmcontext: %s: %w", op, err)
+	}
+	m.archiveAppend(seq, msg)
+	m.noteAdded()
+	return seq, nil
+}
+
 func (m *Manager) AddUserMessage(ctx context.Context, msg spawnllm.Message) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	seq := m.store.AddFullMessage(m.sessionKey, msg)
-	m.archiveAppend(seq, msg)
-	m.noteAdded()
+	seq, err := m.addMessage("add user message", msg)
+	if err != nil {
+		return 0, err
+	}
 	if err := m.triggerCheck(ctx); err != nil {
 		// Automatic triggers log and continue — do not block the LLM call.
 		logger.WarnCF("llmcontext", "compression error on AddUserMessage (continuing)", map[string]any{
@@ -289,9 +303,10 @@ func (m *Manager) AddAssistantMessage(ctx context.Context, msg spawnllm.Message)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	seq := m.store.AddFullMessage(m.sessionKey, msg)
-	m.archiveAppend(seq, msg)
-	m.noteAdded()
+	seq, err := m.addMessage("add assistant message", msg)
+	if err != nil {
+		return 0, err
+	}
 	if err := m.triggerCheck(ctx); err != nil {
 		// Automatic triggers log and continue — do not block the LLM call.
 		logger.WarnCF("llmcontext", "compression error on AddAssistantMessage (continuing)", map[string]any{
@@ -311,10 +326,7 @@ func (m *Manager) AddToolCallMessage(_ context.Context, msg spawnllm.Message) (i
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	seq := m.store.AddFullMessage(m.sessionKey, msg)
-	m.archiveAppend(seq, msg)
-	m.noteAdded()
-	return seq, nil
+	return m.addMessage("add tool call message", msg)
 }
 
 // AddToolResult records a tool result message.
@@ -325,10 +337,7 @@ func (m *Manager) AddToolResult(_ context.Context, msg spawnllm.Message) (int64,
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	seq := m.store.AddFullMessage(m.sessionKey, msg)
-	m.archiveAppend(seq, msg)
-	m.noteAdded()
-	return seq, nil
+	return m.addMessage("add tool result", msg)
 }
 
 // Assemble is the single per-dispatch entry point: eviction sweep, emergency
@@ -1169,48 +1178,65 @@ func (m *Manager) LastCompactionReport() *CompactionReport {
 	return m.lastReport
 }
 
+// splitSystemMessage separates a stored system message at the head of the
+// window from the conversation that follows it.
+func splitSystemMessage(stored []memory.StoredMessage) (*memory.StoredMessage, []memory.StoredMessage) {
+	if len(stored) > 0 && stored[0].Role == "system" {
+		sys := stored[0]
+		return &sys, stored[1:]
+	}
+	return nil, stored
+}
+
 // ForceCompress is the host's recovery when a provider rejects the request as
-// too large: it drops the oldest turn groups until the window is under the
-// safety line, without calling a model. The retained messages keep their
-// seqs, repeated scheduled fires collapse, and the existing summary stays as
-// it is. Returns ErrCompressionFailed when the retained window is still over
-// the line, which means the newest turn group alone does not fit.
+// too large. It measures the request the way Assemble does — stored history
+// plus the reserve, the tool schemas and the measured build overhead — and,
+// when that is past the safety line, runs the safety-net pass: a summary
+// through the model when one is configured, then the drop-only fallback that
+// removes the oldest turn groups whole until the request fits. Without a
+// model it goes straight to the drops and the existing summary stays as it
+// is. It bypasses the failure circuit breaker, and the retained messages keep
+// their seqs. Returns ErrCompressionFailed when the request is still over the
+// line afterwards, which means the newest turn group alone does not fit.
 func (m *Manager) ForceCompress(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	stored := m.store.GetHistoryWithSeqs(m.sessionKey)
-	var sysMsg *memory.StoredMessage
-	conv := stored
-	if len(stored) > 0 && stored[0].Role == "system" {
-		sys := stored[0]
-		sysMsg = &sys
-		conv = stored[1:]
-	}
-	if len(conv) == 0 || m.cfg.contextWindow <= 0 {
+	if m.cfg.contextWindow <= 0 {
 		return nil
 	}
-	pct := func(c []memory.StoredMessage) float64 {
-		return float64(m.estTokens(storedToPlain(c))) * 100 / float64(m.cfg.contextWindow)
+	sysMsg, conv := splitSystemMessage(m.store.GetHistoryWithSeqs(m.sessionKey))
+	if len(conv) == 0 {
+		return nil
 	}
-	if pct(conv) < float64(m.cfg.safetyPercent) {
+	if m.contextPercent(storedToPlain(conv)) < float64(m.cfg.safetyPercent) {
 		return nil
 	}
 
 	before := len(conv)
-	conv = m.dropOldestStoredGroups(ctx, conv)
-	m.applyLargeMsgChecksStored(conv)
-	if err := m.persistStoredResult(sysMsg, conv, nil); err != nil {
-		return fmt.Errorf("force compress: %w", err)
+	if m.caller != nil {
+		err := m.doCompress(ctx, true)
+		m.recordCompactionOutcome(err)
+		if err != nil && !errors.Is(err, ErrCompressionPartial) {
+			return fmt.Errorf("force compress: %w", err)
+		}
+	} else {
+		conv = m.dropOldestStoredGroups(ctx, conv)
+		m.applyLargeMsgChecksStored(conv)
+		if err := m.persistStoredResult(sysMsg, conv, nil); err != nil {
+			return fmt.Errorf("force compress: %w", err)
+		}
 	}
 	m.compressedAtCount = m.msgCount
 
+	_, after := splitSystemMessage(m.store.GetHistoryWithSeqs(m.sessionKey))
 	logger.WarnCF("llmcontext", "force compression executed", map[string]any{
 		"session_key":  m.sessionKey,
-		"dropped_msgs": before - len(conv),
-		"new_count":    len(conv),
+		"summarized":   m.caller != nil,
+		"removed_msgs": before - len(after),
+		"new_count":    len(after),
 	})
-	if pct(conv) >= float64(m.cfg.safetyPercent) {
+	if m.contextPercent(storedToPlain(after)) >= float64(m.cfg.safetyPercent) {
 		return fmt.Errorf("%w: current turn group alone exceeds context window (%d tokens)",
 			ErrCompressionFailed, m.cfg.contextWindow)
 	}
@@ -1322,8 +1348,12 @@ func (m *Manager) Reset(ctx context.Context) error {
 	// archive (keyed by memory seq) and the summary log are intentionally left
 	// intact — the agent keeps its long-term memory across a clear; new messages
 	// continue under the next memory seq the store assigns.
-	m.store.TruncateHistory(m.sessionKey, 0)
-	m.store.SetSummary(m.sessionKey, "")
+	if err := m.store.TruncateHistory(m.sessionKey, 0); err != nil {
+		return fmt.Errorf("llmcontext: reset: truncate history: %w", err)
+	}
+	if err := m.store.SetSummary(m.sessionKey, ""); err != nil {
+		return fmt.Errorf("llmcontext: reset: clear summary: %w", err)
+	}
 
 	// 4. Zero the compaction counters in the durable state. The host's
 	// per-session settings in the same record survive a clear.

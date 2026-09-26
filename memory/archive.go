@@ -415,15 +415,20 @@ func (a *ArchiveStore) AppendSummary(rec SummaryRecord) (int64, error) {
 		return 0, nil
 	}
 
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return insertSummary(a.db, rec)
+}
+
+// insertSummary inserts one summaries row and returns its id. A zero
+// GeneratedAt is stamped now.
+func insertSummary(ex execer, rec SummaryRecord) (int64, error) {
 	genAt := rec.GeneratedAt
 	if genAt.IsZero() {
 		genAt = time.Now()
 	}
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	res, err := a.db.Exec(
+	res, err := ex.Exec(
 		`INSERT INTO summaries
 		    (generated_at, model, profile, source_seq_start, source_seq_end, covered_seq_start, covered_seq_end, summary)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,

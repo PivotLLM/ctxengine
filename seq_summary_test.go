@@ -56,29 +56,35 @@ func (s *seqStore) GetHistoryWithSeqs(_ string) []memory.StoredMessage {
 }
 
 func (s *seqStore) GetSummary(_ string) string { return s.summary }
-func (s *seqStore) SetSummary(_, v string)     { s.summary = v }
-func (s *seqStore) SetHistory(_ string, h []spawnllm.Message) {
+func (s *seqStore) SetSummary(_, v string) error {
+	s.summary = v
+	return nil
+}
+
+func (s *seqStore) SetHistory(_ string, h []spawnllm.Message) error {
 	stored := make([]memory.StoredMessage, len(h))
 	for i, msg := range h {
 		stored[i] = memory.StoredMessage{Seq: int64(i + 1), Message: msg}
 	}
 	s.stored = stored
+	return nil
 }
 
-func (s *seqStore) SetHistoryWithSeqs(_ string, h []memory.StoredMessage) {
+func (s *seqStore) SetHistoryWithSeqs(_ string, h []memory.StoredMessage) error {
 	cp := make([]memory.StoredMessage, len(h))
 	copy(cp, h)
 	s.stored = cp
+	return nil
 }
-func (s *seqStore) Save(_ string) error                               { return nil }
-func (s *seqStore) AddMessage(_, _, _ string)                         {}
-func (s *seqStore) AddFullMessage(_ string, _ spawnllm.Message) int64 { return 0 }
-func (s *seqStore) TruncateHistory(_ string, _ int)                   {}
-func (s *seqStore) SetPendingTurn(_ string) error                     { return nil }
-func (s *seqStore) ClearPendingTurn(_ string) error                   { return nil }
-func (s *seqStore) GetArchiveBounds(_ string) (int64, int64)          { return 0, 0 }
-func (s *seqStore) ListPendingSessions() ([]string, error)            { return nil, nil }
-func (s *seqStore) Close() error                                      { return nil }
+func (s *seqStore) Save(_ string) error                                        { return nil }
+func (s *seqStore) AddMessage(_, _, _ string) error                            { return nil }
+func (s *seqStore) AddFullMessage(_ string, _ spawnllm.Message) (int64, error) { return 0, nil }
+func (s *seqStore) TruncateHistory(_ string, _ int) error                      { return nil }
+func (s *seqStore) SetPendingTurn(_ string) error                              { return nil }
+func (s *seqStore) ClearPendingTurn(_ string) error                            { return nil }
+func (s *seqStore) GetArchiveBounds(_ string) (int64, int64)                   { return 0, 0 }
+func (s *seqStore) ListPendingSessions() ([]string, error)                     { return nil, nil }
+func (s *seqStore) Close() error                                               { return nil }
 
 // buildSeqSummaryJSON builds a valid summary JSON with the given coverage fields.
 func buildSeqSummaryJSON(goals string, coveredStart, coveredEnd int) string {
