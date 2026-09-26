@@ -10,8 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 // agedCompressStore is compressTestStore with per-message ages. Ages are keyed
@@ -50,7 +51,7 @@ func ageAll(msgs []spawnllm.Message, days int) map[string]int {
 // they say.
 func distinctConversation(pairs, charsPerMessage int) []spawnllm.Message {
 	msgs := make([]spawnllm.Message, 0, pairs*2)
-	for i := 0; i < pairs; i++ {
+	for i := range pairs {
 		pad := func(tag string) string {
 			s := fmt.Sprintf("%s-%d-", tag, i)
 			for len(s) < charsPerMessage {

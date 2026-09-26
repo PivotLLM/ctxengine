@@ -14,13 +14,15 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/PivotLLM/spawnllm"
 
 	"github.com/PivotLLM/ctxengine/logger"
 	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/ctxengine/session"
-	"github.com/PivotLLM/spawnllm"
 )
 
 // maxCompressAttempts bounds the number of ModelCaller.Complete calls one
@@ -100,8 +102,15 @@ func (m *Manager) doCompress(ctx context.Context, safetyNet bool) error {
 	maxAge := m.retainMaxAge()
 	now := time.Now()
 
-	archiveMin, archiveMax := m.archiveWindow()
-	existingSummary, _ := unmarshalSummary(m.store.GetSummary(m.sessionKey))
+	archiveMin, archiveMax := m.archiveWindow() //nolint:contextcheck // archive bounds come from memory.ArchiveStore, whose read API takes no context
+	existingSummary, parseErr := unmarshalSummary(m.store.GetSummary(m.sessionKey))
+	if parseErr != nil {
+		// A stored summary that is not a valid structured summary (legacy
+		// prose, a corrupt write) is not merged; this pass starts afresh.
+		logger.DebugCF("llmcontext", "existing summary not parsed; compacting without it",
+			map[string]any{"session_key": m.sessionKey, "error": parseErr.Error()})
+		existingSummary = nil
+	}
 
 	// Load the agent's compression profile once per compression pass.
 	compressionProfile := loadCompressionProfile(m.cfg.compressionProfileDir)
@@ -300,8 +309,8 @@ func (m *Manager) noteRefusedModel(model, detail string) {
 // lastUserStoredIndex returns the index of the most recent user-role message in
 // the (system-stripped) conversation slice, or -1 if there is none.
 func lastUserStoredIndex(stored []memory.StoredMessage) int {
-	for i := len(stored) - 1; i >= 0; i-- {
-		if stored[i].Role == "user" {
+	for i, s := range slices.Backward(stored) {
+		if s.Role == "user" {
 			return i
 		}
 	}
@@ -497,7 +506,7 @@ func (m *Manager) callModel(
 		return true
 	}
 
-	for attempt := 0; attempt < maxCompressAttempts; attempt++ {
+	for range maxCompressAttempts {
 		start := time.Now()
 		reply, err := m.caller.Complete(ctx, req)
 		dur := time.Since(start)
@@ -628,9 +637,9 @@ func loadCompressionProfile(dir string) string {
 	}
 	// Prefer the uppercase name to match the other workspace files (AGENTS.md,
 	// SOUL.md, MEMORY.md, …); fall back to the legacy lowercase name.
-	data, err := os.ReadFile(filepath.Join(dir, "COMPRESSION.md"))
+	data, err := os.ReadFile(filepath.Join(dir, "COMPRESSION.md")) //nolint:gosec // G304: dir is the host-configured compression profile directory
 	if err != nil {
-		data, err = os.ReadFile(filepath.Join(dir, "compression.md"))
+		data, err = os.ReadFile(filepath.Join(dir, "compression.md")) //nolint:gosec // G304: dir is the host-configured compression profile directory
 		if err != nil {
 			return ""
 		}
@@ -647,12 +656,12 @@ func stripHTMLComments(s string) string {
 			break
 		}
 		rest := s[start+len("<!--"):]
-		end := strings.Index(rest, "-->")
-		if end < 0 {
+		_, after, ok := strings.Cut(rest, "-->")
+		if !ok {
 			s = s[:start] // unterminated comment: drop to end
 			break
 		}
-		s = s[:start] + rest[end+len("-->"):]
+		s = s[:start] + after
 	}
 	return s
 }
@@ -879,14 +888,14 @@ func collapseRetainedCronRuns(stored []memory.StoredMessage, noise NoiseKeyFunc)
 	return result
 }
 
-// truncateRunes returns s clipped to at most max runes, appending an ellipsis
-// when truncation occurs.
-func truncateRunes(s string, max int) string {
+// truncateRunes returns s clipped to at most maxRunes runes, appending an
+// ellipsis when truncation occurs.
+func truncateRunes(s string, maxRunes int) string {
 	r := []rune(s)
-	if len(r) <= max {
+	if len(r) <= maxRunes {
 		return s
 	}
-	return string(r[:max]) + "…"
+	return string(r[:maxRunes]) + "…"
 }
 
 // toolOutputOpen and toolOutputClose delimit a tool result in the summarizer
@@ -1156,7 +1165,7 @@ func (m *Manager) persistStoredResult(sysMsg *memory.StoredMessage, conv []memor
 func (m *Manager) persistStepwise(newStored []memory.StoredMessage, raw *string, checkpoint *memory.SummaryRecord, applyState func(*memory.CompactionState)) error {
 	var err error
 	if sh, ok := m.store.(interface {
-		SetHistoryWithSeqs(string, []memory.StoredMessage) error
+		SetHistoryWithSeqs(sessionKey string, history []memory.StoredMessage) error
 	}); ok {
 		err = sh.SetHistoryWithSeqs(m.sessionKey, newStored)
 	} else {
@@ -1204,7 +1213,7 @@ func (m *Manager) dropOldestStoredGroups(_ context.Context, conv []memory.Stored
 
 		span := 1
 		if plain[0].Role == "assistant" && len(plain[0].ToolCalls) > 0 {
-			span = collectToolGroup(plain).span
+			span = collectToolGroup(plain[0], plain[1:]).span
 		}
 		if span >= len(conv) {
 			break // the only group left is the current turn

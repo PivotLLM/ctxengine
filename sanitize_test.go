@@ -7,8 +7,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 func sanAssistantWithTools(toolIDs ...string) spawnllm.Message {

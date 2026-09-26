@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/PivotLLM/ctxengine/internal/iox"
 	"github.com/PivotLLM/ctxengine/logger"
 	"github.com/PivotLLM/ctxengine/memory"
 )
@@ -117,12 +118,12 @@ func MigrateJSONL(dir string) (MigrateReport, error) {
 // read; skipped is true when the archive already holds a window.
 func migrateSession(dir, base string, hasWindow bool) (key string, skipped bool, err error) {
 	metaPath := filepath.Join(dir, base+".meta.json")
-	data, err := os.ReadFile(metaPath)
+	data, err := os.ReadFile(metaPath) //nolint:gosec // G304: a file found by listing the host's sessions directory
 	if err != nil {
 		return "", false, fmt.Errorf("read meta: %w", err)
 	}
 	var meta legacyMeta
-	if err := json.Unmarshal(data, &meta); err != nil {
+	if err = json.Unmarshal(data, &meta); err != nil {
 		return "", false, fmt.Errorf("decode meta: %w", err)
 	}
 	if meta.Key == "" {
@@ -134,7 +135,7 @@ func migrateSession(dir, base string, hasWindow bool) (key string, skipped bool,
 	if err != nil {
 		return key, false, fmt.Errorf("open archive: %w", err)
 	}
-	defer a.Close()
+	defer iox.CloseQuietly("session", a)
 
 	st, err := a.State()
 	if err != nil {
@@ -201,11 +202,11 @@ func migrateSession(dir, base string, hasWindow bool) (key string, skipped bool,
 // crash) are logged and dropped. Lines written before seqs existed (seq == 0)
 // are assigned skip+lineNo, the position the JSONL store reported for them.
 func readLegacyWindow(path string, skip int) ([]memory.StoredMessage, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // G304: a file found by listing the host's sessions directory
 	if err != nil {
 		return nil, fmt.Errorf("open window: %w", err)
 	}
-	defer f.Close()
+	defer iox.CloseQuietly("session", f)
 
 	var msgs []memory.StoredMessage
 	scanner := bufio.NewScanner(f)

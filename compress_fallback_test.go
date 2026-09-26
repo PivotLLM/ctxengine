@@ -218,7 +218,7 @@ func TestBreaker_RecordOutcome(t *testing.T) {
 	mgr := newCompressManager(store, []*mockLLM{{}})
 
 	// Failures accumulate and trip the breaker at the threshold.
-	for i := 0; i < defaultMaxConsecutiveCompactFailures; i++ {
+	for i := range defaultMaxConsecutiveCompactFailures {
 		if mgr.autoCompactionSuppressed() {
 			t.Fatalf("breaker tripped early after %d failures", i)
 		}
@@ -238,7 +238,7 @@ func TestBreaker_RecordOutcome(t *testing.T) {
 	}
 
 	// ErrNothingToCompress must not count as a failure.
-	for i := 0; i < defaultMaxConsecutiveCompactFailures+2; i++ {
+	for range defaultMaxConsecutiveCompactFailures + 2 {
 		mgr.recordCompactionOutcome(ErrNothingToCompress)
 	}
 	if mgr.autoCompactionSuppressed() {
@@ -271,7 +271,7 @@ func TestBreaker_SuppressesAutoPath(t *testing.T) {
 	mgr.msgCount = len(store.history)
 
 	// Trip the breaker with consecutive automatic-compaction failures.
-	for i := 0; i < defaultMaxConsecutiveCompactFailures; i++ {
+	for range defaultMaxConsecutiveCompactFailures {
 		_ = mgr.compress(context.Background(), false)
 	}
 	if !mgr.autoCompactionSuppressed() {

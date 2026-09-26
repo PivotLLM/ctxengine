@@ -11,8 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 func writeFixture(t *testing.T, dir, name, content string) {
@@ -101,8 +102,10 @@ func TestMigrateJSONL_ProductionFixture(t *testing.T) {
 	}
 
 	// Sources renamed; the checkpoint log and the ancient archive left alone.
-	for _, name := range []string{fixtureBase + ".jsonl.migrated", fixtureBase + ".meta.json.migrated",
-		fixtureBase + ".summaries.jsonl", fixtureBase + ".archive.jsonl", fixtureBase + ".archive.db"} {
+	for _, name := range []string{
+		fixtureBase + ".jsonl.migrated", fixtureBase + ".meta.json.migrated",
+		fixtureBase + ".summaries.jsonl", fixtureBase + ".archive.jsonl", fixtureBase + ".archive.db",
+	} {
 		if !exists(t, dir, name) {
 			t.Errorf("expected %s", name)
 		}

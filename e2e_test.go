@@ -26,10 +26,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PivotLLM/spawnllm"
+
 	cronmsg "github.com/PivotLLM/ctxengine/internal/testcron"
 	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/ctxengine/session"
-	"github.com/PivotLLM/spawnllm"
 )
 
 // e2eKey carries a ':' so the on-disk sanitisation is exercised too.
@@ -1146,7 +1147,7 @@ func TestE2E_ManagerConcurrencySmoke(t *testing.T) {
 
 	// Seed so the compaction has something to summarize.
 	var added atomic.Int64
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if seq, _ := mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: pad(fmt.Sprintf("seed user %d ", i), 200)}); seq > 0 {
 			added.Add(1)
 		}
@@ -1168,10 +1169,10 @@ func TestE2E_ManagerConcurrencySmoke(t *testing.T) {
 		fn()
 	}
 	const writers, perWriter, readers, perReader = 4, 20, 3, 15
-	for w := 0; w < writers; w++ {
+	for w := range writers {
 		wg.Add(1)
 		go guard(fmt.Sprintf("writer %d", w), func() {
-			for i := 0; i < perWriter; i++ {
+			for i := range perWriter {
 				var seq int64
 				if i%2 == 0 {
 					seq, _ = mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: fmt.Sprintf("writer %d message %d", w, i)})
@@ -1184,10 +1185,10 @@ func TestE2E_ManagerConcurrencySmoke(t *testing.T) {
 			}
 		})
 	}
-	for r := 0; r < readers; r++ {
+	for r := range readers {
 		wg.Add(1)
 		go guard(fmt.Sprintf("reader %d", r), func() {
-			for i := 0; i < perReader; i++ {
+			for range perReader {
 				if _, err := mgr.Assemble(ctx, e2eRequest()); err != nil {
 					t.Errorf("Assemble: %v", err)
 				}
@@ -1231,7 +1232,7 @@ func cronFires(t *testing.T, mgr *Manager, n int) []int64 {
 	t.Helper()
 	ctx := context.Background()
 	var seqs []int64
-	for i := 0; i < n; i++ {
+	for i := range n {
 		fire := cronmsg.Build("3f9a1c0d", cronTime(i), "self-check: anything new?")
 		seq, err := mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: fire})
 		if err != nil || seq <= 0 {

@@ -135,7 +135,7 @@ func TestPruneMessages_FTSConsistency(t *testing.T) {
 func TestPruneSummariesToCount(t *testing.T) {
 	a := openTestArchive(t)
 	now := time.Now()
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		if _, err := a.AppendSummary(SummaryRecord{
 			GeneratedAt: now,
 			Summary:     "s",
@@ -165,7 +165,7 @@ func TestPruneSummariesToCount(t *testing.T) {
 func TestPruneSummariesToCount_NoOpAtZero(t *testing.T) {
 	a := openTestArchive(t)
 	now := time.Now()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, err := a.AppendSummary(SummaryRecord{GeneratedAt: now, Summary: "s"}); err != nil {
 			t.Fatalf("AppendSummary %d: %v", i, err)
 		}
@@ -186,7 +186,7 @@ func TestPruneSummariesToCount_NoOpAtZero(t *testing.T) {
 func TestPruneSummariesBefore(t *testing.T) {
 	a := openTestArchive(t)
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if _, err := a.AppendSummary(SummaryRecord{
 			GeneratedAt: base.AddDate(0, 0, i),
 			Summary:     "s",

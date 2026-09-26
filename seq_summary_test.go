@@ -10,8 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 // seqTrackingLLM captures the request sent to the model for inspection.
@@ -404,11 +405,4 @@ func TestSeqAware_ExistingSummaryCoverageAndRefsSurviveNextCompaction(t *testing
 	if !foundOld {
 		t.Fatalf("old key moment ref #5 was not preserved: %+v", got.KeyMoments)
 	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

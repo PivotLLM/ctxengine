@@ -13,10 +13,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/PivotLLM/spawnllm"
 	_ "modernc.org/sqlite"
 
+	"github.com/PivotLLM/ctxengine/internal/iox"
 	"github.com/PivotLLM/ctxengine/logger"
-	"github.com/PivotLLM/spawnllm"
 )
 
 // ErrArchiveUnavailable is returned when the ArchiveStore failed to open and
@@ -197,13 +198,13 @@ func Open(path string) (*ArchiveStore, error) {
 
 	// Enable WAL mode for concurrent reader support.
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		db.Close()
+		iox.CloseQuietly("memory", db)
 		logger.WarnCF("memory", "archive WAL failed",
 			map[string]any{"path": path, "error": err.Error()})
 		return &ArchiveStore{path: path, unavailable: true}, ErrArchiveUnavailable
 	}
 	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", busyTimeoutMillis)); err != nil {
-		db.Close()
+		iox.CloseQuietly("memory", db)
 		logger.WarnCF("memory", "archive busy_timeout failed",
 			map[string]any{"path": path, "error": err.Error()})
 		return &ArchiveStore{path: path, unavailable: true}, ErrArchiveUnavailable
@@ -211,7 +212,7 @@ func Open(path string) (*ArchiveStore, error) {
 
 	// Create schema.
 	if _, err := db.Exec(archiveSchema); err != nil {
-		db.Close()
+		iox.CloseQuietly("memory", db)
 		logger.WarnCF("memory", "archive schema failed",
 			map[string]any{"path": path, "error": err.Error()})
 		return &ArchiveStore{path: path, unavailable: true}, ErrArchiveUnavailable
@@ -222,7 +223,7 @@ func Open(path string) (*ArchiveStore, error) {
 		logger.WarnCF("memory", "archive FTS5 integrity check failed, rebuilding",
 			map[string]any{"path": path, "error": err.Error()})
 		if _, rebuildErr := db.Exec("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')"); rebuildErr != nil {
-			db.Close()
+			iox.CloseQuietly("memory", db)
 			logger.WarnCF("memory", "archive FTS5 rebuild failed",
 				map[string]any{"path": path, "error": rebuildErr.Error()})
 			return &ArchiveStore{path: path, unavailable: true}, ErrArchiveUnavailable
@@ -278,7 +279,7 @@ func (a *ArchiveStore) importLegacySummaries() {
 	if legacyPath == "" {
 		return
 	}
-	f, err := os.Open(legacyPath)
+	f, err := os.Open(legacyPath) //nolint:gosec // G304: derived from the archive's own path
 	if os.IsNotExist(err) {
 		return
 	}
@@ -287,7 +288,7 @@ func (a *ArchiveStore) importLegacySummaries() {
 			map[string]any{"path": legacyPath, "error": err.Error()})
 		return
 	}
-	defer f.Close()
+	defer iox.CloseQuietly("memory", f)
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
@@ -474,7 +475,7 @@ func (a *ArchiveStore) ListSummaries() ([]SummaryMeta, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+	defer iox.CloseQuietly("memory", db)
 
 	rows, err := db.QueryContext(context.Background(),
 		`SELECT id, generated_at, model, profile, source_seq_start, source_seq_end, covered_seq_start, covered_seq_end
@@ -483,7 +484,11 @@ func (a *ArchiveStore) ListSummaries() ([]SummaryMeta, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			logger.DebugCF("memory", "rows close failed", map[string]any{"error": closeErr.Error()})
+		}
+	}()
 
 	var metas []SummaryMeta
 	for rows.Next() {
@@ -521,7 +526,7 @@ func (a *ArchiveStore) GetSummary(id int64) (SummaryRecord, bool, error) {
 	if err != nil {
 		return SummaryRecord{}, false, err
 	}
-	defer db.Close()
+	defer iox.CloseQuietly("memory", db)
 
 	var (
 		rec     SummaryRecord
@@ -577,7 +582,7 @@ func (a *ArchiveStore) QueryRange(minSeq, maxSeq int64) ([]StoredMessage, error)
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+	defer iox.CloseQuietly("memory", db)
 
 	rows, err := db.QueryContext(context.Background(),
 		`SELECT seq, payload, created_at FROM messages WHERE seq BETWEEN ? AND ? ORDER BY seq`,
@@ -586,7 +591,11 @@ func (a *ArchiveStore) QueryRange(minSeq, maxSeq int64) ([]StoredMessage, error)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			logger.DebugCF("memory", "rows close failed", map[string]any{"error": closeErr.Error()})
+		}
+	}()
 
 	return scanStoredMessages(rows)
 }
@@ -618,7 +627,7 @@ func (a *ArchiveStore) Search(ctx context.Context, query, role string, limit int
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+	defer iox.CloseQuietly("memory", db)
 
 	rows, err := db.QueryContext(ctx,
 		`SELECT m.seq, m.payload, m.created_at
@@ -633,7 +642,11 @@ func (a *ArchiveStore) Search(ctx context.Context, query, role string, limit int
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			logger.DebugCF("memory", "rows close failed", map[string]any{"error": closeErr.Error()})
+		}
+	}()
 
 	return scanSearchResults(rows)
 }
@@ -650,7 +663,7 @@ func (a *ArchiveStore) Bounds() (minSeq, maxSeq int64, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	defer db.Close()
+	defer iox.CloseQuietly("memory", db)
 
 	row := db.QueryRowContext(context.Background(),
 		`SELECT COALESCE(MIN(seq), 0), COALESCE(MAX(seq), 0) FROM messages`,
@@ -672,7 +685,7 @@ func (a *ArchiveStore) Stats() (count int, first, last time.Time, err error) {
 	if err != nil {
 		return 0, time.Time{}, time.Time{}, err
 	}
-	defer db.Close()
+	defer iox.CloseQuietly("memory", db)
 
 	var firstUnix, lastUnix int64
 	row := db.QueryRowContext(context.Background(),
@@ -687,7 +700,7 @@ func (a *ArchiveStore) Stats() (count int, first, last time.Time, err error) {
 	if lastUnix > 0 {
 		last = time.Unix(lastUnix, 0)
 	}
-	return
+	return count, first, last, nil
 }
 
 // MinSeqAfter returns the smallest seq with created_at >= t.Unix().
@@ -702,7 +715,7 @@ func (a *ArchiveStore) MinSeqAfter(t time.Time) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer db.Close()
+	defer iox.CloseQuietly("memory", db)
 
 	var minSeq int64
 	row := db.QueryRowContext(context.Background(),

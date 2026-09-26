@@ -5,10 +5,13 @@ package tools
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/PivotLLM/toolspec"
+
+	"github.com/PivotLLM/ctxengine/internal/iox"
 )
 
 const messagesDescription = "Retrieve historical messages from the current session archive by sequence number. " +
@@ -48,7 +51,7 @@ func (h Host) messages(call *toolspec.ToolCall) (*toolspec.Result, error) {
 	if r != nil {
 		return r, nil
 	}
-	defer a.Close()
+	defer iox.CloseQuietly("tools", a)
 
 	const windowSize = 5000
 	_, maxSeq, boundsErr := a.Bounds()
@@ -64,10 +67,7 @@ func (h Host) messages(call *toolspec.ToolCall) (*toolspec.Result, error) {
 	if floor := maxSeq - windowSize + 1; floor > effectiveMin {
 		effectiveMin = floor
 	}
-	effectiveMax := seqEnd
-	if maxSeq < effectiveMax {
-		effectiveMax = maxSeq
-	}
+	effectiveMax := min(maxSeq, seqEnd)
 
 	msgs, readErr := a.QueryRange(effectiveMin, effectiveMax)
 	if readErr != nil {
@@ -136,7 +136,10 @@ func (h Host) messages(call *toolspec.ToolCall) (*toolspec.Result, error) {
 		}
 		entries[i] = e
 	}
-	out, _ := json.Marshal(entries)
+	out, err := json.Marshal(entries)
+	if err != nil {
+		return errResult("encode error: " + err.Error()), nil
+	}
 	return textResult(string(out)), nil
 }
 
@@ -148,7 +151,7 @@ func parseSeqArgs(args map[string]any) (seqStart, seqEnd int64, err error) {
 	start, hasStart := intArg(args, "seq_start")
 	end, hasEnd := intArg(args, "seq_end")
 	if !hasStart || !hasEnd {
-		return 0, 0, fmt.Errorf("seq or seq_start+seq_end required")
+		return 0, 0, errors.New("seq or seq_start+seq_end required")
 	}
 	if start > end {
 		return 0, 0, fmt.Errorf("seq_start (%d) > seq_end (%d)", start, end)

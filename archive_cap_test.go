@@ -8,9 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/PivotLLM/spawnllm"
+
 	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/ctxengine/session"
-	"github.com/PivotLLM/spawnllm"
 )
 
 // TestArchive_StoresLargeToolResultWhole drives a 100 KB tool result through

@@ -7,13 +7,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/PivotLLM/spawnllm"
+
 	cronmsg "github.com/PivotLLM/ctxengine/internal/testcron"
 	"github.com/PivotLLM/ctxengine/memory"
-	"github.com/PivotLLM/spawnllm"
 )
 
 // Compile-time interface satisfaction check.
@@ -205,7 +207,7 @@ func TestSummary(t *testing.T) {
 
 func TestTruncateHistory(t *testing.T) {
 	s := newStore(t)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		s.AddMessage("trunc", "user", string(rune('a'+i)))
 	}
 
@@ -259,7 +261,7 @@ func TestTruncateHistory(t *testing.T) {
 
 func TestSetHistory_ReplacesWithFreshSeqs(t *testing.T) {
 	s := newStore(t)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		s.AddMessage("replace", "user", "old")
 	}
 	s.TruncateHistory("replace", 2)
@@ -291,7 +293,7 @@ func TestSetHistory_ReplacesWithFreshSeqs(t *testing.T) {
 
 func TestSetHistoryWithSeqs_PreservesStableSeqs(t *testing.T) {
 	s := newStore(t)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		s.AddMessage("preserve", "user", string(rune('a'+i)))
 	}
 	active := s.GetHistoryWithSeqs("preserve")
@@ -315,7 +317,7 @@ func TestSetHistoryWithSeqs_PreservesStableSeqs(t *testing.T) {
 // no seq that must be minted above everything seen.
 func TestSetHistoryWithSeqs_NextSeqMonotonic(t *testing.T) {
 	s := newStore(t)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		s.AddMessage("mono", "user", "m")
 	}
 	// Only low seqs retained: the counter must stay at 5.
@@ -345,7 +347,7 @@ func TestSetHistoryWithSeqs_NextSeqMonotonic(t *testing.T) {
 
 func TestMeaningfulCount_ConsecutiveDuplicates(t *testing.T) {
 	s := newStore(t)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		s.AddMessage("mc", "user", string(rune('a'+i)))
 	}
 	// Two duplicates of the last message (same role and content) are noise.
@@ -577,26 +579,22 @@ func TestConcurrent_AddAndRead(t *testing.T) {
 	s := newStore(t)
 	var wg sync.WaitGroup
 	const goroutines, perGoroutine = 10, 20
-	for g := 0; g < goroutines; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < perGoroutine; i++ {
+	for range goroutines {
+		wg.Go(func() {
+			for i := range perGoroutine {
 				s.AddMessage("concurrent", "user", fmt.Sprintf("msg %d", i))
 				_ = s.GetHistory("concurrent")
 			}
-		}()
+		})
 	}
 	// A summariser truncating concurrently, as in the agent loop.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 10; i++ {
+	wg.Go(func() {
+		for range 10 {
 			s.SetSummary("concurrent", "summary")
 			s.TruncateHistory("concurrent", 50)
 			s.ForgetSession("concurrent")
 		}
-	}()
+	})
 	wg.Wait()
 
 	stored := s.GetHistoryWithSeqs("concurrent")
@@ -614,10 +612,5 @@ func TestConcurrent_AddAndRead(t *testing.T) {
 }
 
 func contains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s, v)
 }

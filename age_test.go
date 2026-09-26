@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 // agingStore is a mockStore whose GetHistoryWithSeqs stamps CreatedAt, which the

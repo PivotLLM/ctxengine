@@ -11,8 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 // compressTestStore is a minimal in-memory SessionStore for compress tests.
@@ -131,7 +132,7 @@ func validSummaryJSON(goals string) string {
 // Each message content is repeated to produce the desired approximate token count.
 func makeConversation(pairs int, charsPerMessage int) []spawnllm.Message {
 	msgs := make([]spawnllm.Message, 0, pairs*2)
-	for i := 0; i < pairs; i++ {
+	for range pairs {
 		msgs = append(msgs,
 			spawnllm.Message{Role: "user", Content: strings.Repeat("u", charsPerMessage)},
 			spawnllm.Message{Role: "assistant", Content: strings.Repeat("a", charsPerMessage)},
@@ -253,7 +254,7 @@ func TestCompress_RefusalDetectedAndModelSkipped(t *testing.T) {
 func TestCompress_NeverEmptiesLiveWindow(t *testing.T) {
 	big := strings.Repeat("x", 4000)
 	history := []spawnllm.Message{{Role: "system", Content: "sys"}}
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		id := fmt.Sprintf("tc%d", i)
 		history = append(history,
 			spawnllm.Message{Role: "assistant", Content: big, ToolCalls: []spawnllm.ToolCall{{ID: id, Name: "x"}}},
@@ -287,7 +288,7 @@ func TestCompress_NeverEmptiesLiveWindow(t *testing.T) {
 func TestCompress_RetainsLastUserMessage(t *testing.T) {
 	history := []spawnllm.Message{{Role: "system", Content: "sys"}}
 	history = append(history, spawnllm.Message{Role: "user", Content: strings.Repeat("u", 200)})
-	for i := 0; i < 60; i++ { // long assistant tail after the only user turn
+	for range 60 { // long assistant tail after the only user turn
 		history = append(history, spawnllm.Message{Role: "assistant", Content: strings.Repeat("a", 200)})
 	}
 	store := &compressTestStore{history: history}
@@ -590,13 +591,7 @@ func TestCompress_NotifyCallback(t *testing.T) {
 	if notifications[0] != "compression started" {
 		t.Errorf("expected first notification 'compression started'; got %q", notifications[0])
 	}
-	found := false
-	for _, n := range notifications {
-		if n == "compression complete" {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(notifications, "compression complete")
 	if !found {
 		t.Errorf("expected 'compression complete' notification; got %v", notifications)
 	}

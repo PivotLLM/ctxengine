@@ -5,6 +5,7 @@ package ctxengine
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -91,7 +92,7 @@ type IndexEntry struct {
 // Validate returns an error if the summary is malformed.
 func (s *Summary) Validate() error {
 	if s == nil {
-		return fmt.Errorf("summary is nil")
+		return errors.New("summary is nil")
 	}
 	s.NormalizeRefs()
 	if s.Version != summaryVersion {
@@ -542,7 +543,7 @@ func unmarshalSummary(raw string) (*Summary, error) {
 	// Must look like JSON to avoid log spam on legacy prose summaries.
 	trimmed := strings.TrimSpace(raw)
 	if len(trimmed) == 0 || trimmed[0] != '{' {
-		return nil, fmt.Errorf("not JSON")
+		return nil, errors.New("not JSON")
 	}
 	var s Summary
 	if err := json.Unmarshal([]byte(raw), &s); err != nil {

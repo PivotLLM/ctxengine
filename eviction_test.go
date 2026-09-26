@@ -9,8 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 // --- test builders -------------------------------------------------------
@@ -144,7 +145,7 @@ func TestSweep_MidAgeReadKeptWithoutBudget(t *testing.T) {
 func TestSweep_StaleAnySize(t *testing.T) {
 	// Small read at age 12 (> evict 10) → evicted "stale" regardless of size.
 	specs := []turnSpec{{tool: "file_read_bytes", id: "r", args: map[string]any{"path": "a.md"}, content: "tiny"}}
-	for i := 0; i < 11; i++ { // 11 newer text turns ⇒ read age 12
+	for range 11 { // 11 newer text turns ⇒ read age 12
 		specs = append(specs, turnSpec{text: "t"})
 	}
 	store := newSeqStore(buildHistory(specs...))
@@ -320,7 +321,7 @@ func TestSweep_NonReaderUntouched(t *testing.T) {
 func TestSweep_Idempotent(t *testing.T) {
 	// Read at age 12 (> evict 10) → stale eviction on the first sweep, no-op after.
 	specs := []turnSpec{{tool: "file_read_bytes", id: "r", args: map[string]any{"path": "a.md"}, content: strings.Repeat("x", 200)}}
-	for i := 0; i < 11; i++ {
+	for range 11 {
 		specs = append(specs, turnSpec{text: "t"})
 	}
 	store := newSeqStore(buildHistory(specs...))
@@ -354,7 +355,7 @@ func TestSweep_EvictedStaysEvicted(t *testing.T) {
 	// Age both reads past evict_turns by appending more turns.
 	aged := store.GetHistoryWithSeqs("sess")
 	base := aged[len(aged)-1].Seq
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		aged = append(aged, memory.StoredMessage{
 			Seq:     base + int64(i+1),
 			Message: spawnllm.Message{Role: "assistant", Content: "more"},

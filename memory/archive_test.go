@@ -217,10 +217,7 @@ func TestArchiveStore_RetrievalWindowClamping(t *testing.T) {
 	if floor := maxSeq - windowSize + 1; floor > effectiveMin {
 		effectiveMin = floor
 	}
-	effectiveMax := requestedMax
-	if maxSeq < effectiveMax {
-		effectiveMax = maxSeq
-	}
+	effectiveMax := min(maxSeq, requestedMax)
 
 	// effectiveMin = max(1, 300-250+1) = 51
 	// effectiveMax = min(1000, 300) = 300
@@ -300,26 +297,22 @@ func TestArchiveStore_ConcurrentReadDuringWrite(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Writer goroutine.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i := 1; i <= total; i++ {
 			if err := a.Append(int64(i), sampleMsg("user", fmt.Sprintf("msg%d", i)), now); err != nil {
 				t.Errorf("Append seq=%d: %v", i, err)
 				return
 			}
 		}
-	}()
+	})
 
 	// Reader goroutines — each opens its own read-only connection.
-	for r := 0; r < 5; r++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 5 {
+		wg.Go(func() {
 			// We just verify no SQLITE_BUSY or other errors occur.
 			_, _ = a.QueryRange(1, 25)
 			_, _, _ = a.Bounds()
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -541,18 +534,16 @@ func TestArchiveStore_ConcurrentAppends(t *testing.T) {
 	const perGoroutine = 20
 	var wg sync.WaitGroup
 
-	for g := 0; g < goroutines; g++ {
+	for g := range goroutines {
 		g := g
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < perGoroutine; i++ {
+		wg.Go(func() {
+			for i := range perGoroutine {
 				seq := int64(g*perGoroutine + i + 1)
 				if err := a.Append(seq, sampleMsg("user", fmt.Sprintf("msg%d", seq)), now); err != nil {
 					t.Errorf("goroutine %d Append seq=%d: %v", g, seq, err)
 				}
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

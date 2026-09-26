@@ -12,7 +12,7 @@ import (
 // searchTurns builds a history of search turns followed by enough filler to age
 // them past EvictTurns.
 func searchTurns(specs []turnSpec, filler int) []turnSpec {
-	for i := 0; i < filler; i++ {
+	for i := range filler {
 		specs = append(specs, turnSpec{text: string(rune('a' + i))})
 	}
 	return specs

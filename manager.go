@@ -13,10 +13,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/PivotLLM/spawnllm"
+
 	"github.com/PivotLLM/ctxengine/logger"
 	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/ctxengine/session"
-	"github.com/PivotLLM/spawnllm"
 )
 
 // Manager implements ContextManager over a SessionStore. The system prompt is
@@ -372,13 +373,13 @@ func (m *Manager) Assemble(ctx context.Context, req AssembleRequest) (Assembly, 
 	if m.emergencyCompactOnHistory(ctx) {
 		out.Compacted = true
 	}
-	msgs, err := m.build(req)
+	msgs, err := m.build(req) //nolint:contextcheck // archive bounds come from memory.ArchiveStore, whose read API takes no context
 	if err != nil {
 		return out, err
 	}
 	if !out.Compacted && m.emergencyCompactOnBuilt(ctx, msgs) {
 		out.Compacted = true
-		if msgs, err = m.build(req); err != nil {
+		if msgs, err = m.build(req); err != nil { //nolint:contextcheck // archive bounds come from memory.ArchiveStore, whose read API takes no context
 			return out, err
 		}
 	}
@@ -442,7 +443,7 @@ func (m *Manager) PreDispatchCheck(ctx context.Context, current []spawnllm.Messa
 	if !m.emergencyCompactOnHistory(ctx) {
 		return current, nil
 	}
-	built, err := m.build(AssembleRequest{})
+	built, err := m.build(AssembleRequest{}) //nolint:contextcheck // archive bounds come from memory.ArchiveStore, whose read API takes no context
 	if err != nil {
 		return current, err
 	}
@@ -459,7 +460,7 @@ func (m *Manager) CheckAndCompress(ctx context.Context, built []spawnllm.Message
 	if !m.emergencyCompactOnBuilt(ctx, built) {
 		return built, nil
 	}
-	fresh, err := m.build(AssembleRequest{})
+	fresh, err := m.build(AssembleRequest{}) //nolint:contextcheck // archive bounds come from memory.ArchiveStore, whose read API takes no context
 	if err != nil {
 		return built, err
 	}
@@ -615,10 +616,7 @@ func (m *Manager) setToolDefinitionTokens(n int) {
 // raw history (system prompt, rendered summary, memory blocks) so the
 // history-only trigger paths can account for it. Called by Build().
 func (m *Manager) recordBuiltOverhead(built, history []spawnllm.Message) {
-	overhead := m.estTokens(built) - m.estTokens(history)
-	if overhead < 0 {
-		overhead = 0
-	}
+	overhead := max(m.estTokens(built)-m.estTokens(history), 0)
 	m.builtOverheadTokens = overhead
 }
 
@@ -871,7 +869,7 @@ func (m *Manager) archiveWindow() (minSeq, maxSeq int64) {
 			minSeq = dayFloor
 		}
 	}
-	return
+	return minSeq, maxSeq
 }
 
 // compress logs the compression trigger and dispatches to the LLM-based
@@ -1085,7 +1083,7 @@ func (m *Manager) SetTestCompressHook(fn func(safetyNet bool)) {
 func (m *Manager) Build(_ context.Context) ([]spawnllm.Message, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.build(AssembleRequest{})
+	return m.build(AssembleRequest{}) //nolint:contextcheck // archive bounds come from memory.ArchiveStore, whose read API takes no context
 }
 
 // systemSeparator joins the blocks of the system message. Every block — a

@@ -84,15 +84,13 @@ func TestReadOnlyConnections_WaitOutLock(t *testing.T) {
 	var mu sync.Mutex
 	failures := map[string]error{}
 	for name, read := range reads {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := read(); err != nil {
 				mu.Lock()
 				failures[name] = err
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

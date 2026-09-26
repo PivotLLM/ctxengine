@@ -15,8 +15,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PivotLLM/ctxengine/logger"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/internal/iox"
+	"github.com/PivotLLM/ctxengine/logger"
 )
 
 // SessionState is the per-session record that used to live in <key>.meta.json.
@@ -158,7 +160,7 @@ func (a *ArchiveStore) reader() (db *sql.DB, done func(), err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return db, func() { db.Close() }, nil
+	return db, func() { iox.CloseQuietly("memory", db) }, nil
 }
 
 // Window returns the live history window ordered by seq. Returns an empty
@@ -175,7 +177,11 @@ func (a *ArchiveStore) Window() ([]StoredMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			logger.DebugCF("memory", "rows close failed", map[string]any{"error": closeErr.Error()})
+		}
+	}()
 
 	msgs := []StoredMessage{}
 	for rows.Next() {
@@ -300,7 +306,10 @@ func (a *ArchiveStore) withTx(fn func(tx *sql.Tx) error) error {
 		return err
 	}
 	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
+		if rbErr := tx.Rollback(); rbErr != nil {
+			logger.WarnCF("memory", "archive rollback failed",
+				map[string]any{"path": a.path, "error": rbErr.Error()})
+		}
 		return err
 	}
 	return tx.Commit()

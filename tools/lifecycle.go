@@ -43,7 +43,7 @@ func (h Host) compact(call *toolspec.ToolCall) (*toolspec.Result, error) {
 	if h.Compact == nil {
 		return errResult("compact function not configured"), nil
 	}
-	message, _ := call.Args["message"].(string)
+	message := stringArg(call.Args, "message")
 
 	h.log("info", "session compaction requested by tool", map[string]any{"session": key})
 	report, summary, err := h.Compact(call.Ctx, key)
@@ -96,12 +96,15 @@ func (h Host) info(call *toolspec.ToolCall) (*toolspec.Result, error) {
 	info, err := h.SessionInfo(call.Ctx, key)
 	if err != nil {
 		h.log("warn", "session info lookup failed", map[string]any{"session": key, "error": err.Error()})
-		return errResult("session info error: " + err.Error()), nil
+		return errResult("session info error: " + err.Error()), nil //nolint:nilerr // tool failures reach the model as an error result; the Go error is for dispatch failures
 	}
 	if info == nil {
 		return errResult("session info error: no session information returned"), nil
 	}
-	out, _ := json.Marshal(info)
+	out, err := json.Marshal(info) //nolint:gosec // G117: session_key names the session, it is not a secret
+	if err != nil {
+		return errResult("encode error: " + err.Error()), nil //nolint:nilerr // tool failures reach the model as an error result; the Go error is for dispatch failures
+	}
 	return textResult(string(out)), nil
 }
 
@@ -140,7 +143,7 @@ func (h Host) clear(call *toolspec.ToolCall) (*toolspec.Result, error) {
 	if h.Clear == nil {
 		return errResult("clear function not configured"), nil
 	}
-	message, _ := call.Args["message"].(string)
+	message := stringArg(call.Args, "message")
 	if err := h.Clear(call.Ctx, key, message); err != nil {
 		h.log("warn", "session clear refused", map[string]any{"session": key, "error": err.Error()})
 		return errResult(err.Error()), nil

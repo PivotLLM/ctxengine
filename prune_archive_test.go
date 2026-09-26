@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 // TestPruneArchive_TriggeredOnArchiveOpen verifies the retention prune is WIRED
@@ -131,7 +132,7 @@ func TestPruneArchive_HonorsSummaryCount(t *testing.T) {
 	mgr := newResetManager(store, key, WithArchiveDir(t.TempDir()), WithSummaryMaxCount(2))
 
 	a := mgr.getOrOpenArchive()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if _, err := a.AppendSummary(memory.SummaryRecord{GeneratedAt: time.Now(), Summary: "s"}); err != nil {
 			t.Fatalf("AppendSummary %d: %v", i, err)
 		}
@@ -189,7 +190,7 @@ func TestPruneArchive_ZeroConfigNoOp(t *testing.T) {
 			t.Fatalf("Append %d: %v", i, err)
 		}
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, err := a.AppendSummary(memory.SummaryRecord{GeneratedAt: now.AddDate(0, 0, -100), Summary: "s"}); err != nil {
 			t.Fatalf("AppendSummary %d: %v", i, err)
 		}

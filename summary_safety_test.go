@@ -9,8 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 // TestSummarizerInput_ToolOutputCannotImpersonateTurn feeds a tool result that

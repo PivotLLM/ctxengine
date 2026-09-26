@@ -10,9 +10,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/PivotLLM/spawnllm"
+
 	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/ctxengine/session"
-	"github.com/PivotLLM/spawnllm"
 )
 
 // newResetStore returns a mockStore pre-populated with a few messages and a

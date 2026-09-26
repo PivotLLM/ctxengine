@@ -1,13 +1,12 @@
 // ctxengine
 // License: MIT
 
-// Package cronmsg is the single source of truth for the cron-message wrapper
-// format. The scheduler produces a wrapped message announcing the fire time so
-// the LLM knows the message originated from a scheduled job; the storage and
-// context-compaction layers parse that wrapper to detect repeated fires of the
-// same job. Keeping the format in one leaf package (with no dependencies on
-// schedule/memory/llmcontext) guarantees the producer and the two consumers
-// never drift apart.
+// Package testcron is a test-only copy of the host's cron-message wrapper
+// format (ClawEh's cronmsg package). A host scheduler wraps a scheduled message
+// in a header announcing the fire time; the engine's storage and compaction
+// layers recognise that wrapper to detect repeated fires of the same job. The
+// tests import this package as cronmsg to produce wrapped messages exactly as
+// the scheduler does.
 //
 // The wrapped form is:
 //

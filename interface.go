@@ -102,7 +102,7 @@ func (a Assembly) Changed() bool { return len(a.Evictions) > 0 || a.Compacted }
 // compaction holds that serialisation for the length of its model call, and
 // the host services it calls out to (the model caller, the notify and
 // reporter callbacks) must not call back into the same manager.
-type ContextManager interface {
+type ContextManager interface { //nolint:interfacebloat // the engine's public API; splitting it is a breaking change
 	// AddUserMessage appends a user message and runs the turn-boundary
 	// compaction check.
 	AddUserMessage(ctx context.Context, msg spawnllm.Message) (int64, error)

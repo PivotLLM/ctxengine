@@ -11,9 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/PivotLLM/spawnllm"
+
 	"github.com/PivotLLM/ctxengine/logger"
 	"github.com/PivotLLM/ctxengine/memory"
-	"github.com/PivotLLM/spawnllm"
 )
 
 // SQLiteStore implements SessionStore on top of the per-session archive
@@ -46,7 +47,7 @@ type sessionHandle struct {
 // NewSQLiteStore creates a store rooted at dir, creating the directory if
 // needed. No database is opened until a session is used.
 func NewSQLiteStore(dir string) (*SQLiteStore, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // G301: the host's sessions directory; its mode is the host's decision, applied only when ctxengine creates it
 		return nil, fmt.Errorf("session: create directory: %w", err)
 	}
 	return &SQLiteStore{dir: dir, sessions: make(map[string]*sessionHandle)}, nil

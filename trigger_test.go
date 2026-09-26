@@ -8,9 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/PivotLLM/spawnllm"
+
 	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/ctxengine/session"
-	"github.com/PivotLLM/spawnllm"
 )
 
 // mockStore is a minimal in-memory SessionStore for trigger tests.
@@ -124,7 +125,7 @@ func TestTrigger_BelowFloor(t *testing.T) {
 
 	ctx := context.Background()
 	// Add 10 messages with tiny content well below floor.
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		if _, err := mgr.AddUserMessage(ctx, msgWithContent("hi")); err != nil {
 			t.Fatalf("AddUserMessage error: %v", err)
 		}
@@ -156,7 +157,7 @@ func TestTrigger_CountTriggered(t *testing.T) {
 	ctx := context.Background()
 	// 100-char content → 25 tokens each; 5 msgs → 125 tokens → 12.5% → above 10% floor.
 	content := strings.Repeat("x", 100)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if _, err := mgr.AddUserMessage(ctx, msgWithContent(content)); err != nil {
 			t.Fatalf("AddUserMessage error: %v", err)
 		}
@@ -258,7 +259,7 @@ func TestTrigger_CountResetAfterCompress(t *testing.T) {
 	content := strings.Repeat("x", 100) // 25 tokens → 2.5% each
 
 	// First batch: 5 messages → compress fires once.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if _, err := mgr.AddUserMessage(ctx, msgWithContent(content)); err != nil {
 			t.Fatalf("AddUserMessage error: %v", err)
 		}
@@ -268,7 +269,7 @@ func TestTrigger_CountResetAfterCompress(t *testing.T) {
 	}
 
 	// Add 4 more messages: should NOT trigger (count since last compress = 4 < 5).
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		if _, err := mgr.AddUserMessage(ctx, msgWithContent(content)); err != nil {
 			t.Fatalf("AddUserMessage error: %v", err)
 		}
@@ -299,7 +300,7 @@ func TestTrigger_NoContextWindow(t *testing.T) {
 	mgr.SetTestCompressHook(func(_ bool) { called = true })
 
 	ctx := context.Background()
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if _, err := mgr.AddUserMessage(ctx, msgWithContent("hello")); err != nil {
 			t.Fatalf("AddUserMessage error: %v", err)
 		}

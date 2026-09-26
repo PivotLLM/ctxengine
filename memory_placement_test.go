@@ -86,7 +86,7 @@ func TestRoutedMemory_NeverPersisted(t *testing.T) {
 	store.SetHistory("test-session", []spawnllm.Message{{Role: "user", Content: "question"}})
 
 	mgr := newMemMgr(t, store, "STABLEBLOCK", "ROUTEDBLOCK")
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if _, err := mgr.Build(context.Background()); err != nil {
 			t.Fatalf("Build: %v", err)
 		}

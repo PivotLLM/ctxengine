@@ -7,8 +7,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 // TestCommitCompaction writes a compaction result through the store and reads
@@ -16,7 +17,7 @@ import (
 // checkpoint, the compaction counters, and a seq counter that carries on.
 func TestCommitCompaction(t *testing.T) {
 	s := newStore(t)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		mustAdd(t, s, "c", spawnllm.Message{Role: "user", Content: string(rune('a' + i))})
 	}
 	tail := s.GetHistoryWithSeqs("c")[3:] // seqs 4, 5

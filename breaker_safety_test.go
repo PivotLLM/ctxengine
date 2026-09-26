@@ -22,7 +22,7 @@ func failingLLM(n int) *mockLLM {
 // tripBreaker fails the automatic path until the breaker trips.
 func tripBreaker(t *testing.T, mgr *Manager) {
 	t.Helper()
-	for i := 0; i < defaultMaxConsecutiveCompactFailures; i++ {
+	for range defaultMaxConsecutiveCompactFailures {
 		_ = mgr.compress(context.Background(), false)
 	}
 	if !mgr.autoCompactionSuppressed() {
@@ -99,7 +99,7 @@ func TestBreaker_TrippedHookFires(t *testing.T) {
 	}))
 	mgr.msgCount = len(store.history)
 
-	for i := 0; i < defaultMaxConsecutiveCompactFailures-1; i++ {
+	for range defaultMaxConsecutiveCompactFailures - 1 {
 		_ = mgr.compress(context.Background(), false)
 	}
 	if len(trips) != 0 {

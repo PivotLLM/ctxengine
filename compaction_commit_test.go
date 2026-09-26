@@ -9,9 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/PivotLLM/spawnllm"
+
 	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/ctxengine/session"
-	"github.com/PivotLLM/spawnllm"
 )
 
 // The real store commits a compaction atomically.
@@ -29,7 +30,7 @@ func TestCompaction_CommitsThroughSQLiteStore(t *testing.T) {
 	}
 	defer store.Close()
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		for _, role := range []string{"user", "assistant"} {
 			if _, err := store.AddFullMessage("sess", spawnllm.Message{Role: role, Content: strings.Repeat(role[:1], 200)}); err != nil {
 				t.Fatalf("seed: %v", err)

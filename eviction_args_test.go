@@ -9,8 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 // argPolicy is basePolicy with argument eviction switched on.
@@ -54,7 +55,7 @@ func bigWriteHistory(payload string, filler int) []memory.StoredMessage {
 		args:    map[string]any{"path": "novels/ch17.md", "content": payload},
 		content: "wrote 47185 bytes",
 	}}
-	for i := 0; i < filler; i++ {
+	for i := range filler {
 		specs = append(specs, turnSpec{text: string(rune('a' + i))})
 	}
 	return buildHistory(specs...)
@@ -173,7 +174,7 @@ func TestSweepArgs_MCPToolCovered(t *testing.T) {
 		args:    map[string]any{"section_id": "s1", "text": strings.Repeat("d", 20_000)},
 		content: "added",
 	}}
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		specs = append(specs, turnSpec{text: string(rune('a' + i))})
 	}
 	store := newSeqStore(buildHistory(specs...))

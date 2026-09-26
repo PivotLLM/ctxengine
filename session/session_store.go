@@ -1,8 +1,9 @@
 package session
 
 import (
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 // SessionStore defines the persistence operations the engine uses.
@@ -13,7 +14,7 @@ import (
 // a successful one: the engine hands it back to the caller (Add*) or fails the
 // pass that needed it (compaction, Reset). Read methods return the empty value
 // on failure and log it.
-type SessionStore interface {
+type SessionStore interface { //nolint:interfacebloat // the engine's public storage contract; splitting it is a breaking change
 	// AddMessage appends a simple role/content message to the session.
 	AddMessage(sessionKey, role, content string) error
 	// AddFullMessage appends a complete message including tool calls. It returns

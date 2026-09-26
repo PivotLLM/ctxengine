@@ -18,7 +18,7 @@ func assertSamePrefix(t *testing.T, a, b []spawnllm.Message, n int) {
 	if len(a) < n || len(b) < n {
 		t.Fatalf("slices shorter than the %d-message prefix: %d and %d", n, len(a), len(b))
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if a[i].Role != b[i].Role || a[i].Content != b[i].Content {
 			t.Fatalf("prefix differs at message %d:\n%s %q\nvs\n%s %q", i, a[i].Role, a[i].Content, b[i].Role, b[i].Content)
 		}

@@ -15,14 +15,14 @@ import (
 // (all older than EvictTurns), followed by enough plain turns to age them.
 func staleReads(n, bytes int) []memory.StoredMessage {
 	specs := make([]turnSpec, 0, n+12)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		specs = append(specs, turnSpec{
 			tool: "file_read_bytes", id: "r" + string(rune('a'+i)),
 			args:    map[string]any{"path": "f" + string(rune('a'+i)) + ".md"},
 			content: strings.Repeat("x", bytes),
 		})
 	}
-	for i := 0; i < 12; i++ {
+	for range 12 {
 		specs = append(specs, turnSpec{text: "t"})
 	}
 	return buildHistory(specs...)

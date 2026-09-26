@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/PivotLLM/toolspec"
+
+	"github.com/PivotLLM/ctxengine/internal/iox"
 )
 
 const searchDescription = "Search archived session messages using FTS5 full-text search. " +
@@ -52,7 +54,7 @@ func (h Host) search(call *toolspec.ToolCall) (*toolspec.Result, error) {
 		return errResult("query parameter is required"), nil
 	}
 
-	role, _ := call.Args["role"].(string)
+	role := stringArg(call.Args, "role")
 
 	limit := 20
 	if l, ok := intArg(call.Args, "limit"); ok {
@@ -69,7 +71,7 @@ func (h Host) search(call *toolspec.ToolCall) (*toolspec.Result, error) {
 	if r != nil {
 		return r, nil
 	}
-	defer a.Close()
+	defer iox.CloseQuietly("tools", a)
 
 	results, searchErr := a.Search(call.Ctx, query, role, limit)
 	if searchErr != nil {
@@ -97,6 +99,9 @@ func (h Host) search(call *toolspec.ToolCall) (*toolspec.Result, error) {
 			CreatedAt: res.CreatedAt,
 		}
 	}
-	out, _ := json.Marshal(entries)
+	out, err := json.Marshal(entries)
+	if err != nil {
+		return errResult("encode error: " + err.Error()), nil
+	}
 	return textResult(string(out)), nil
 }
