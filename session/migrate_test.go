@@ -60,7 +60,8 @@ func writeProductionFixture(t *testing.T, dir string) {
 		"show_tool_activity":             true,
 		"pending_turn":                   true,
 	}
-	metaJSON, _ := json.MarshalIndent(meta, "", "  ")
+	metaJSON, err := json.MarshalIndent(meta, "", "  ")
+	noErr(t, err)
 	writeFixture(t, dir, fixtureBase+".meta.json", string(metaJSON))
 
 	lines := []string{
@@ -78,7 +79,8 @@ func writeProductionFixture(t *testing.T, dir string) {
 		SourceSeqStart: 1, SourceSeqEnd: 4, CoveredSeqStart: 1, CoveredSeqEnd: 4,
 		SummaryHash: "h1", Summary: `{"version":2,"overview":"about disks"}`,
 	}
-	cpJSON, _ := json.Marshal(cp)
+	cpJSON, err := json.Marshal(cp)
+	noErr(t, err)
 	writeFixture(t, dir, fixtureBase+".summaries.jsonl", string(cpJSON)+"\n")
 	writeFixture(t, dir, fixtureBase+".archive.jsonl", `{"seq":1,"role":"user","content":"ancient"}`+"\n")
 }
@@ -192,7 +194,9 @@ func TestMigrateJSONL_ProductionFixture(t *testing.T) {
 	if !exists(t, dir, fixtureBase+".meta.json") {
 		t.Error("a skipped session's sources must be left untouched")
 	}
-	if st, _ := a.State(); st.NextSeq != 7 {
+	st, err = a.State()
+	noErr(t, err)
+	if st.NextSeq != 7 {
 		t.Errorf("skipped session was rewritten: NextSeq = %d", st.NextSeq)
 	}
 
@@ -204,8 +208,10 @@ func TestMigrateJSONL_ProductionFixture(t *testing.T) {
 	if got := len(s.GetHistory(fixtureKey)); got != 4 {
 		t.Errorf("window after append = %d, want 4", got)
 	}
-	if st, _ := s.GetCompactionState(fixtureKey); st.MeaningfulCount != 5 {
-		t.Errorf("MeaningfulCount = %d, want 5", st.MeaningfulCount)
+	cs, err := s.GetCompactionState(fixtureKey)
+	noErr(t, err)
+	if cs.MeaningfulCount != 5 {
+		t.Errorf("MeaningfulCount = %d, want 5", cs.MeaningfulCount)
 	}
 }
 

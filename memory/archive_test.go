@@ -21,7 +21,7 @@ func openTestArchive(t *testing.T) *ArchiveStore {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(func() { a.Close() })
+	t.Cleanup(func() { noErr(t, a.Close()) })
 	return a
 }
 
@@ -250,7 +250,7 @@ func TestArchiveStore_WALMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer a.Close()
+	defer func() { noErr(t, a.Close()) }()
 
 	var mode string
 	row := a.db.QueryRow("PRAGMA journal_mode")
@@ -309,9 +309,13 @@ func TestArchiveStore_ConcurrentReadDuringWrite(t *testing.T) {
 	// Reader goroutines — each opens its own read-only connection.
 	for range 5 {
 		wg.Go(func() {
-			// We just verify no SQLITE_BUSY or other errors occur.
-			_, _ = a.QueryRange(1, 25)
-			_, _, _ = a.Bounds()
+			// No SQLITE_BUSY or other error may occur.
+			if _, err := a.QueryRange(1, 25); err != nil {
+				t.Errorf("QueryRange: %v", err)
+			}
+			if _, _, err := a.Bounds(); err != nil {
+				t.Errorf("Bounds: %v", err)
+			}
 		})
 	}
 

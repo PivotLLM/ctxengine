@@ -14,7 +14,8 @@ import (
 // newToolTurnsManager builds a Manager suitable for tool-turn tests.
 // It uses the mockStore from trigger_test.go and the mockLLM + helpers from
 // compress_test.go (all in the same package).
-func newToolTurnsManager(store *mockStore, clients []*mockLLM, opts ...Option) *Manager {
+func newToolTurnsManager(t testing.TB, store *mockStore, clients []*mockLLM, opts ...Option) *Manager {
+	t.Helper()
 	baseOpts := []Option{
 		WithContextWindow(10000),
 		// Tests below reason in exact token terms against a small window; the
@@ -29,14 +30,14 @@ func newToolTurnsManager(store *mockStore, clients []*mockLLM, opts ...Option) *
 	}
 	baseOpts = append(baseOpts, opts...)
 	cm := New("sess", store, baseOpts...)
-	return cm.(*Manager)
+	return asManager(t, cm)
 }
 
 // TestAddToolCallMessage_IncrementsMsgCount verifies that AddToolCallMessage
 // writes the message to the store and increments msgCount by 1.
 func TestAddToolCallMessage_IncrementsMsgCount(t *testing.T) {
 	store := newMockStore()
-	mgr := newToolTurnsManager(store, nil)
+	mgr := newToolTurnsManager(t, store, nil)
 
 	before := mgr.msgCount
 	msg := spawnllm.Message{
@@ -68,7 +69,7 @@ func TestAddToolCallMessage_IncrementsMsgCount(t *testing.T) {
 // message to the store and increments msgCount by 1.
 func TestAddToolResult_IncrementsMsgCount(t *testing.T) {
 	store := newMockStore()
-	mgr := newToolTurnsManager(store, nil)
+	mgr := newToolTurnsManager(t, store, nil)
 
 	before := mgr.msgCount
 	msg := spawnllm.Message{
@@ -98,7 +99,7 @@ func TestAddToolResult_IncrementsMsgCount(t *testing.T) {
 // (AddToolCallMessage + AddToolResult) increments msgCount by exactly 2.
 func TestToolTurnPair_MsgCountIncrementsByTwo(t *testing.T) {
 	store := newMockStore()
-	mgr := newToolTurnsManager(store, nil)
+	mgr := newToolTurnsManager(t, store, nil)
 
 	before := mgr.msgCount
 
@@ -131,14 +132,14 @@ func TestToolTurnPair_MsgCountIncrementsByTwo(t *testing.T) {
 // input slice unchanged and fires no compression when history is below all thresholds.
 func TestPreDispatchCheck_BelowThreshold(t *testing.T) {
 	store := newMockStore()
-	mgr := newToolTurnsManager(store, nil)
+	mgr := newToolTurnsManager(t, store, nil)
 
 	// Seed history well below any threshold (~400 chars → ~100 tokens, 1% of 10000).
 	small := []spawnllm.Message{
 		{Role: "user", Content: strings.Repeat("u", 200)},
 		{Role: "assistant", Content: strings.Repeat("a", 200)},
 	}
-	store.SetHistory("sess", small)
+	noErr(t, store.SetHistory("sess", small))
 	mgr.msgCount = len(small)
 
 	compressed := false
@@ -173,12 +174,12 @@ func TestPreDispatchCheck_TriggersCompressionAndRebuilds(t *testing.T) {
 	// 10 pairs × 2 msgs × 300 chars = 6000 chars → ~1500 tokens = 15% of 10000.
 	// Use larger content: 10 pairs × 2 msgs × 2000 chars = 40000 chars → ~10000 tokens = 100% of 10000.
 	history := makeConversation(10, 2000)
-	store.SetHistory("sess", history)
+	noErr(t, store.SetHistory("sess", history))
 
 	llm := &mockLLM{
 		responses: []string{validSummaryJSON("compressed goals")},
 	}
-	mgr := newToolTurnsManager(store, []*mockLLM{llm})
+	mgr := newToolTurnsManager(t, store, []*mockLLM{llm})
 	mgr.msgCount = len(history)
 
 	// Use a larger input slice to contrast with the rebuilt (compressed) slice.
@@ -207,10 +208,10 @@ func TestPreDispatchCheck_NormalBand_DoesNotFire(t *testing.T) {
 	// safetyPercent (80%). Pre-change this fired the normal path; now it must not.
 	// 10 pairs × 2 msgs × 1250 chars = 25000 chars → ~6250 tokens = 62.5% of 10000.
 	history := makeConversation(10, 1250)
-	store.SetHistory("sess", history)
+	noErr(t, store.SetHistory("sess", history))
 
 	compressed := false
-	mgr := newToolTurnsManager(store, nil)
+	mgr := newToolTurnsManager(t, store, nil)
 	mgr.compressHook = func(_ bool) { compressed = true }
 	mgr.msgCount = len(history)
 
@@ -238,10 +239,10 @@ func TestPreDispatchCheck_CountTrigger_DoesNotFireMidTurn(t *testing.T) {
 
 	// Small history (~2% of context) but a large message count since last compaction.
 	history := makeConversation(2, 200)
-	store.SetHistory("sess", history)
+	noErr(t, store.SetHistory("sess", history))
 
 	compressed := false
-	mgr := newToolTurnsManager(store, nil)
+	mgr := newToolTurnsManager(t, store, nil)
 	mgr.compressHook = func(_ bool) { compressed = true }
 	mgr.compressedAtCount = 0
 	mgr.msgCount = defaultMessageThreshold + 50 // well past the count threshold
@@ -265,12 +266,12 @@ func TestPreDispatchCheck_ReturnsFreshBuiltSlice(t *testing.T) {
 
 	// History at 100% of context window.
 	history := makeConversation(10, 2000)
-	store.SetHistory("sess", history)
+	noErr(t, store.SetHistory("sess", history))
 
 	llm := &mockLLM{
 		responses: []string{validSummaryJSON("goals after compression")},
 	}
-	mgr := newToolTurnsManager(store, []*mockLLM{llm})
+	mgr := newToolTurnsManager(t, store, []*mockLLM{llm})
 	mgr.msgCount = len(history)
 
 	input := make([]spawnllm.Message, len(history))

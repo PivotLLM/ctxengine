@@ -23,10 +23,10 @@ func TestArchive_StoresLargeToolResultWhole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { noErr(t, store.Close()) }()
 	ctx := context.Background()
-	mgr := New("sess", store, WithArchiveDir(dir), WithContextWindow(10_000_000), WithMessageThreshold(0)).(*Manager)
-	defer mgr.Close(ctx)
+	mgr := asManager(t, New("sess", store, WithArchiveDir(dir), WithContextWindow(10_000_000), WithMessageThreshold(0)))
+	defer func() { noErr(t, mgr.Close(ctx)) }()
 
 	content := strings.Repeat("chapter text ", 8000) // ~104 KB
 	if _, err := mgr.AddToolCallMessage(ctx, spawnllm.Message{Role: "assistant", ToolCalls: []spawnllm.ToolCall{

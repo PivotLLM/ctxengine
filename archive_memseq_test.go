@@ -66,10 +66,10 @@ func TestArchiveKeyedByMemorySeq_HighSeqRefsSurviveStrip(t *testing.T) {
 	)
 
 	store := newMockStore()
-	mgr := New("longlived", store,
+	mgr := asManager(t, New("longlived", store,
 		WithContextWindow(100000),
 		WithArchiveDir(t.TempDir()),
-	).(*Manager)
+	))
 
 	// Archive 201 messages keyed by their MEMORY seq (5000..5200), exactly as
 	// AddUserMessage/AddAssistantMessage now do with the seq returned by the

@@ -47,7 +47,7 @@ func TestReadOnlyConnections_WaitOutLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("raw open: %v", err)
 	}
-	defer raw.Close()
+	defer func() { noErr(t, raw.Close()) }()
 	raw.SetMaxOpenConns(1) // BEGIN and COMMIT must run on the same connection
 	if _, err := raw.Exec("PRAGMA journal_mode=DELETE"); err != nil {
 		t.Fatalf("journal_mode=DELETE: %v", err)

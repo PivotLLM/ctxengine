@@ -21,17 +21,17 @@ func TestPruneArchive_TriggeredOnArchiveOpen(t *testing.T) {
 	const key = "open-prune"
 
 	// Populate an archive with 6 messages (no cap), then close it.
-	mgr1 := newResetManager(newResetStore(key), key, WithArchiveDir(dir))
+	mgr1 := newResetManager(t, newResetStore(key), key, WithArchiveDir(dir))
 	for i := int64(1); i <= 6; i++ {
 		mgr1.archiveAppend(i, spawnllm.Message{Role: "user", Content: "m"})
 	}
 	if a := mgr1.getOrOpenArchive(); a != nil {
-		_ = a.Close()
+		noErr(t, a.Close())
 	}
 
 	// A fresh manager with a count cap of 3 opens the existing archive; the
 	// open path must prune it down to the newest 3.
-	mgr2 := newResetManager(newResetStore(key), key, WithArchiveDir(dir), WithArchiveMessageCount(3))
+	mgr2 := newResetManager(t, newResetStore(key), key, WithArchiveDir(dir), WithArchiveMessageCount(3))
 	minSeq, maxSeq, err := mgr2.getOrOpenArchive().Bounds()
 	if err != nil {
 		t.Fatalf("Bounds: %v", err)
@@ -51,7 +51,7 @@ func TestPruneArchive_TriggeredByCompaction(t *testing.T) {
 	// compaction actually persists — only then does the wired prune run.
 	const summaryInWindow = `{"version":2,"state":{"goals":[{"text":"g","refs":[{"seq_start":6,"seq_end":6}]}]},"covered_seq_start":0,"covered_seq_end":0}`
 	llm := &mockLLM{responses: []string{summaryInWindow}}
-	mgr := newCompressManager(store, []*mockLLM{llm}, WithArchiveDir(dir), WithArchiveMessageCount(3))
+	mgr := newCompressManager(t, store, []*mockLLM{llm}, WithArchiveDir(dir), WithArchiveMessageCount(3))
 	mgr.msgCount = len(store.history)
 
 	for i := int64(1); i <= 6; i++ {
@@ -79,7 +79,7 @@ func TestPruneArchive_TriggeredByCompaction(t *testing.T) {
 func TestPruneArchive_HonorsMessageCount(t *testing.T) {
 	const key = "prune-session"
 	store := newResetStore(key)
-	mgr := newResetManager(store, key, WithArchiveDir(t.TempDir()), WithArchiveMessageCount(3))
+	mgr := newResetManager(t, store, key, WithArchiveDir(t.TempDir()), WithArchiveMessageCount(3))
 
 	for i := 1; i <= 10; i++ {
 		mgr.archiveAppend(int64(i), spawnllm.Message{Role: "user", Content: "m"})
@@ -101,7 +101,7 @@ func TestPruneArchive_HonorsMessageCount(t *testing.T) {
 func TestPruneArchive_HonorsMessageDays(t *testing.T) {
 	const key = "prune-session"
 	store := newResetStore(key)
-	mgr := newResetManager(store, key, WithArchiveDir(t.TempDir()), WithArchiveDays(2))
+	mgr := newResetManager(t, store, key, WithArchiveDir(t.TempDir()), WithArchiveDays(2))
 
 	a := mgr.getOrOpenArchive()
 	now := time.Now()
@@ -129,7 +129,7 @@ func TestPruneArchive_HonorsMessageDays(t *testing.T) {
 func TestPruneArchive_HonorsSummaryCount(t *testing.T) {
 	const key = "prune-session"
 	store := newResetStore(key)
-	mgr := newResetManager(store, key, WithArchiveDir(t.TempDir()), WithSummaryMaxCount(2))
+	mgr := newResetManager(t, store, key, WithArchiveDir(t.TempDir()), WithSummaryMaxCount(2))
 
 	a := mgr.getOrOpenArchive()
 	for i := range 5 {
@@ -154,7 +154,7 @@ func TestPruneArchive_HonorsSummaryCount(t *testing.T) {
 func TestPruneArchive_HonorsSummaryDays(t *testing.T) {
 	const key = "prune-session"
 	store := newResetStore(key)
-	mgr := newResetManager(store, key, WithArchiveDir(t.TempDir()), WithSummaryRetentionDays(2))
+	mgr := newResetManager(t, store, key, WithArchiveDir(t.TempDir()), WithSummaryRetentionDays(2))
 
 	a := mgr.getOrOpenArchive()
 	now := time.Now()
@@ -181,7 +181,7 @@ func TestPruneArchive_HonorsSummaryDays(t *testing.T) {
 func TestPruneArchive_ZeroConfigNoOp(t *testing.T) {
 	const key = "prune-session"
 	store := newResetStore(key)
-	mgr := newResetManager(store, key, WithArchiveDir(t.TempDir()))
+	mgr := newResetManager(t, store, key, WithArchiveDir(t.TempDir()))
 
 	a := mgr.getOrOpenArchive()
 	now := time.Now()

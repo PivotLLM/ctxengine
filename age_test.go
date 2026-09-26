@@ -49,7 +49,7 @@ func (s *agingStore) GetHistoryWithSeqs(key string) []memory.StoredMessage {
 // arrives, so before the age trigger such a session never compacted at all.
 func TestTrigger_AgeFiresBelowFloor(t *testing.T) {
 	store := newAgingStore()
-	mgr := newTestManager(store,
+	mgr := newTestManager(t, store,
 		WithContextWindow(1_000_000), // tiny history => far below the floor
 		WithMinPercent(20),
 		WithNormalPercent(50),
@@ -79,7 +79,7 @@ func TestTrigger_AgeFiresBelowFloor(t *testing.T) {
 // with recent history must not compact.
 func TestTrigger_AgeDoesNotFireWhenFresh(t *testing.T) {
 	store := newAgingStore()
-	mgr := newTestManager(store,
+	mgr := newTestManager(t, store,
 		WithContextWindow(1_000_000),
 		WithMinPercent(20),
 		WithMessageThreshold(0),
@@ -102,7 +102,7 @@ func TestTrigger_AgeDoesNotFireWhenFresh(t *testing.T) {
 // performance-first deployment would choose.
 func TestTrigger_AgeDisabled(t *testing.T) {
 	store := newAgingStore()
-	mgr := newTestManager(store,
+	mgr := newTestManager(t, store,
 		WithContextWindow(1_000_000),
 		WithMinPercent(20),
 		WithMessageThreshold(0),
@@ -130,7 +130,7 @@ func TestTrigger_AgeIgnoresSystemMessage(t *testing.T) {
 	store.ages[0] = 90 * 24 * time.Hour // ancient system message
 	store.ages[1] = time.Minute         // fresh conversation
 
-	mgr := newTestManager(store,
+	mgr := newTestManager(t, store,
 		WithContextWindow(1_000_000),
 		WithMinPercent(20),
 		WithMessageThreshold(0),
@@ -237,7 +237,7 @@ func TestSelectTail_ZeroTimestampNotAged(t *testing.T) {
 // removing anything, leaving the window as the real retention rules left it.
 func TestTrigger_AgeDoesNotRefireAgainstTheSameBoundary(t *testing.T) {
 	store := newAgingStore()
-	mgr := newTestManager(store,
+	mgr := newTestManager(t, store,
 		WithContextWindow(1_000_000),
 		WithMinPercent(20),
 		WithMessageThreshold(0),
@@ -264,7 +264,7 @@ func TestTrigger_AgeDoesNotRefireAgainstTheSameBoundary(t *testing.T) {
 // that ages out again would never compact a second time.
 func TestTrigger_AgeFiresAgainOnceTheWindowMovesPast(t *testing.T) {
 	store := newAgingStore()
-	mgr := newTestManager(store,
+	mgr := newTestManager(t, store,
 		WithContextWindow(1_000_000),
 		WithMinPercent(20),
 		WithMessageThreshold(0),
@@ -301,7 +301,7 @@ func TestTrigger_AgeFiresAgainOnceTheWindowMovesPast(t *testing.T) {
 // suppression outright, leaving the trigger armed for the next time.
 func TestTrigger_AgeSuppressionClearsWhenTheWindowComesBack(t *testing.T) {
 	store := newAgingStore()
-	mgr := newTestManager(store,
+	mgr := newTestManager(t, store,
 		WithContextWindow(1_000_000),
 		WithMinPercent(20),
 		WithMessageThreshold(0),

@@ -39,7 +39,7 @@ func prefixRequest(injection string) AssembleRequest {
 func TestAssemble_PrefixStableAcrossTurns(t *testing.T) {
 	ctx := context.Background()
 	store := newMockStore()
-	mgr := New("s", store, WithContextWindow(1_000_000)).(*Manager)
+	mgr := asManager(t, New("s", store, WithContextWindow(1_000_000)))
 	if _, err := mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: "first question"}); err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestAssemble_PrefixStableAcrossTurns(t *testing.T) {
 func TestAssemble_PrefixStableWithinTurn(t *testing.T) {
 	ctx := context.Background()
 	store := newMockStore()
-	mgr := New("s", store, WithContextWindow(1_000_000)).(*Manager)
+	mgr := asManager(t, New("s", store, WithContextWindow(1_000_000)))
 	if _, err := mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: "look it up"}); err != nil {
 		t.Fatal(err)
 	}

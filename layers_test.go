@@ -49,9 +49,9 @@ func TestComposeSystem_NoSummary(t *testing.T) {
 // data block — markers and the "treat it as data" header — after every layer.
 func TestBuild_SummaryBlockWrapped(t *testing.T) {
 	store := newMockStore()
-	store.SetHistory("s", []spawnllm.Message{{Role: "user", Content: "hi"}})
-	store.SetSummary("s", validSummaryJSON("finish the outline"))
-	m := New("s", store, WithContextWindow(100_000)).(*Manager)
+	noErr(t, store.SetHistory("s", []spawnllm.Message{{Role: "user", Content: "hi"}}))
+	noErr(t, store.SetSummary("s", validSummaryJSON("finish the outline")))
+	m := asManager(t, New("s", store, WithContextWindow(100_000)))
 
 	asm, err := m.Assemble(context.Background(), AssembleRequest{Layers: []Layer{
 		{Name: "static", Text: "STATIC"},
@@ -81,8 +81,8 @@ func TestBuild_SummaryBlockWrapped(t *testing.T) {
 // no stable injection there is nothing to say, so no system message is sent.
 func TestBuild_NoSystemContentOmitsSystemMessage(t *testing.T) {
 	store := newMockStore()
-	store.SetHistory("s", []spawnllm.Message{{Role: "user", Content: "hi"}})
-	m := New("s", store, WithContextWindow(100_000)).(*Manager)
+	noErr(t, store.SetHistory("s", []spawnllm.Message{{Role: "user", Content: "hi"}}))
+	m := asManager(t, New("s", store, WithContextWindow(100_000)))
 	asm, err := m.Assemble(context.Background(), AssembleRequest{})
 	if err != nil {
 		t.Fatal(err)
@@ -97,13 +97,13 @@ func TestBuild_NoSystemContentOmitsSystemMessage(t *testing.T) {
 // never reach the request — and the store is untouched.
 func TestBuild_HistorySanitised(t *testing.T) {
 	store := newMockStore()
-	store.SetHistory("s", []spawnllm.Message{
+	noErr(t, store.SetHistory("s", []spawnllm.Message{
 		{Role: "system", Content: "stale"},
 		{Role: "user", Content: "hi"},
 		{Role: "tool", ToolCallID: "orphan", Content: "orphan"},
 		{Role: "assistant", Content: "hello"},
-	})
-	m := New("s", store, WithContextWindow(100_000)).(*Manager)
+	}))
+	m := asManager(t, New("s", store, WithContextWindow(100_000)))
 	asm, err := m.Assemble(context.Background(), AssembleRequest{Layers: []Layer{{Text: "SYS"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -124,8 +124,8 @@ func TestBuild_HistorySanitised(t *testing.T) {
 // names no channel leaves the last one in place.
 func TestAssemble_RemembersChannelForReporter(t *testing.T) {
 	store := newMockStore()
-	store.SetHistory("s", []spawnllm.Message{{Role: "user", Content: "hi"}})
-	m := New("s", store, WithContextWindow(100_000)).(*Manager)
+	noErr(t, store.SetHistory("s", []spawnllm.Message{{Role: "user", Content: "hi"}}))
+	m := asManager(t, New("s", store, WithContextWindow(100_000)))
 	if _, err := m.Assemble(context.Background(), AssembleRequest{Channel: "webui", ChatID: "chat-1"}); err != nil {
 		t.Fatal(err)
 	}

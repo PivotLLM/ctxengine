@@ -105,7 +105,7 @@ func exactHistory() []spawnllm.Message {
 func TestCompress_ExactMustQuoteUser(t *testing.T) {
 	store := &compressTestStore{history: exactHistory()}
 	llm := &mockLLM{model: "m", responses: []string{exactSummaryJSON()}}
-	mgr := newCompressManager(store, []*mockLLM{llm})
+	mgr := newCompressManager(t, store, []*mockLLM{llm})
 	mgr.msgCount = len(store.history)
 
 	if err := mgr.doCompress(context.Background(), false); err != nil {
@@ -139,7 +139,7 @@ func TestCompress_ExactFromEarlierSummarySurvives(t *testing.T) {
 	}
 	echo := `{"version":2,"state":{"goals":[{"text":"g","refs":[{"seq_start":2}]}],"constraints":[{"text":"tabs","exact":"always use tabs for indentation","refs":[{"seq_start":1}]}]}}`
 	llm := &mockLLM{model: "m", responses: []string{echo}}
-	mgr := newCompressManager(store, []*mockLLM{llm})
+	mgr := newCompressManager(t, store, []*mockLLM{llm})
 	mgr.msgCount = len(store.history)
 
 	if err := mgr.doCompress(context.Background(), false); err != nil {
@@ -168,9 +168,9 @@ func TestDropUnsourcedExact_WhitespaceAndCase(t *testing.T) {
 // closing the system message.
 func TestSummaryBlock_RenderedAsDataAfterLayers(t *testing.T) {
 	store := newMockStore()
-	store.SetHistory("s", []spawnllm.Message{{Role: "user", Content: "hi"}})
-	store.SetSummary("s", validSummaryJSON("finish the outline"))
-	m := New("s", store, WithContextWindow(100_000)).(*Manager)
+	noErr(t, store.SetHistory("s", []spawnllm.Message{{Role: "user", Content: "hi"}}))
+	noErr(t, store.SetSummary("s", validSummaryJSON("finish the outline")))
+	m := asManager(t, New("s", store, WithContextWindow(100_000)))
 
 	asm, err := m.Assemble(context.Background(), AssembleRequest{
 		Layers:     []Layer{{Text: "RULES"}, {Text: "TOKEN", AfterSummary: true}},

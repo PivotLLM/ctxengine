@@ -89,7 +89,8 @@ func (s *mockStore) GetHistoryWithSeqs(key string) []memory.StoredMessage {
 
 // newTestManager creates a Manager with the given options and returns the
 // concrete *Manager so tests can call SetTestCompressHook.
-func newTestManager(store session.SessionStore, opts ...Option) *Manager {
+func newTestManager(t testing.TB, store session.SessionStore, opts ...Option) *Manager {
+	t.Helper()
 	// Zero the fixed per-request reserve by default. These tests use tiny
 	// context windows (1000-10000 tokens) to make the trigger arithmetic legible,
 	// and the real 4000-token reserve would dominate every one of them. Tests
@@ -98,7 +99,7 @@ func newTestManager(store session.SessionStore, opts ...Option) *Manager {
 	// The safety margin is pinned to 1.0 for the same reason: these tests
 	// reason in exact tokens. token_calibration_test.go covers the margin.
 	cm := New("test-session", store, append([]Option{WithOverheadTokens(0), WithTokenSafetyMargin(1.0)}, opts...)...)
-	return cm.(*Manager)
+	return asManager(t, cm)
 }
 
 // msgWithContent builds a spawnllm.Message with the given content.
@@ -112,7 +113,7 @@ func TestTrigger_BelowFloor(t *testing.T) {
 	store := newMockStore()
 	// contextWindow=10000, minPercent=20 → floor at 2000 tokens.
 	// Each empty message contributes 0 tokens; use 1-char messages → 0 tokens (integer math).
-	mgr := newTestManager(store,
+	mgr := newTestManager(t, store,
 		WithContextWindow(10000),
 		WithMinPercent(20),
 		WithNormalPercent(50),
@@ -143,7 +144,7 @@ func TestTrigger_CountTriggered(t *testing.T) {
 	// Use contextWindow=1000, minPercent=10 → floor at 100 tokens.
 	// Each message has 60 chars → ~24 tokens; 5 msgs → ~120 tokens → 12% → above floor.
 	// normalPercent=90 ensures the token trigger won't fire; messageThreshold=5.
-	mgr := newTestManager(store,
+	mgr := newTestManager(t, store,
 		WithContextWindow(1000),
 		WithMinPercent(10),
 		WithNormalPercent(90),
@@ -178,7 +179,7 @@ func TestTrigger_NormalPercentTriggered(t *testing.T) {
 	// contextWindow=1000, normalPercent=50 → trigger at 500 tokens.
 	// safetyPercent=80. messageThreshold=100 (won't reach it).
 	// 2100 chars in a single message → 525 tokens → 52.5% → crosses normal (50%).
-	mgr := newTestManager(store,
+	mgr := newTestManager(t, store,
 		WithContextWindow(1000),
 		WithMinPercent(10),
 		WithNormalPercent(50),
@@ -211,7 +212,7 @@ func TestTrigger_SafetyNetTriggered(t *testing.T) {
 	store := newMockStore()
 	// contextWindow=1000, safetyPercent=80 → trigger at 800 tokens.
 	// 3300 chars → 3300/4 = 825 tokens → 82.5% → crosses safetyPercent=80.
-	mgr := newTestManager(store,
+	mgr := newTestManager(t, store,
 		WithContextWindow(1000),
 		WithMinPercent(10),
 		WithNormalPercent(50),
@@ -244,7 +245,7 @@ func TestTrigger_CountResetAfterCompress(t *testing.T) {
 	store := newMockStore()
 	// contextWindow=1000, minPercent=10, normalPercent=90 (won't fire on tokens),
 	// messageThreshold=5. 60-char messages stay above floor but below normalPercent.
-	mgr := newTestManager(store,
+	mgr := newTestManager(t, store,
 		WithContextWindow(1000),
 		WithMinPercent(10),
 		WithNormalPercent(90),
@@ -291,7 +292,7 @@ func TestTrigger_CountResetAfterCompress(t *testing.T) {
 // is attempted regardless of message count.
 func TestTrigger_NoContextWindow(t *testing.T) {
 	store := newMockStore()
-	mgr := newTestManager(store,
+	mgr := newTestManager(t, store,
 		WithContextWindow(0),
 		WithMessageThreshold(2),
 	)

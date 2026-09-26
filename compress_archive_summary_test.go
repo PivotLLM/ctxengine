@@ -26,7 +26,7 @@ func TestCompact_PersistsSummaryToArchive(t *testing.T) {
 
 	store := &compressTestStore{history: makeConversation(10, 200)}
 	llm := &mockLLM{responses: []string{validSummaryJSON("active goal")}}
-	mgr := newCompressManager(store, []*mockLLM{llm},
+	mgr := newCompressManager(t, store, []*mockLLM{llm},
 		WithCompressionProfileDir(profDir),
 		WithCompressModel(ModelChain{Primary: "test-model"}),
 		WithArchiveDir(archiveDir),
@@ -43,7 +43,7 @@ func TestCompact_PersistsSummaryToArchive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenReadOnly archive: %v", err)
 	}
-	defer a.Close()
+	defer func() { noErr(t, a.Close()) }()
 
 	metas, err := a.ListSummaries()
 	if err != nil {

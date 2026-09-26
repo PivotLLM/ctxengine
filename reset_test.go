@@ -30,7 +30,8 @@ func newResetStore(sessionKey string) *mockStore {
 
 // newResetManager returns a *Manager suitable for reset tests.
 // opts are applied after the base options so callers can override.
-func newResetManager(store *mockStore, sessionKey string, opts ...Option) *Manager {
+func newResetManager(t testing.TB, store *mockStore, sessionKey string, opts ...Option) *Manager {
+	t.Helper()
 	baseOpts := []Option{
 		WithContextWindow(10000),
 		WithNormalPercent(90), // high threshold — compression won't fire in these tests
@@ -39,14 +40,14 @@ func newResetManager(store *mockStore, sessionKey string, opts ...Option) *Manag
 	}
 	baseOpts = append(baseOpts, opts...)
 	cm := New(sessionKey, store, baseOpts...)
-	return cm.(*Manager)
+	return asManager(t, cm)
 }
 
 // TestReset_ClearsHistory verifies that after Reset, GetHistory returns nil/empty.
 func TestReset_ClearsHistory(t *testing.T) {
 	const key = "test-session"
 	store := newResetStore(key)
-	mgr := newResetManager(store, key)
+	mgr := newResetManager(t, store, key)
 
 	if err := mgr.Reset(context.Background()); err != nil {
 		t.Fatalf("Reset returned error: %v", err)
@@ -62,7 +63,7 @@ func TestReset_ClearsHistory(t *testing.T) {
 func TestReset_ClearsSummary(t *testing.T) {
 	const key = "test-session"
 	store := newResetStore(key)
-	mgr := newResetManager(store, key)
+	mgr := newResetManager(t, store, key)
 
 	// Confirm summary is non-empty before reset.
 	if store.GetSummary(key) == "" {
@@ -82,7 +83,7 @@ func TestReset_ClearsSummary(t *testing.T) {
 func TestReset_ClearsMsgCount(t *testing.T) {
 	const key = "test-session"
 	store := newResetStore(key)
-	mgr := newResetManager(store, key)
+	mgr := newResetManager(t, store, key)
 
 	// Simulate some message activity.
 	mgr.msgCount = 7
@@ -120,7 +121,7 @@ func TestReset_PreservesArchiveFile(t *testing.T) {
 	const key = "test-session"
 	archiveDir := t.TempDir()
 	store := newResetStore(key)
-	mgr := newResetManager(store, key, WithArchiveDir(archiveDir))
+	mgr := newResetManager(t, store, key, WithArchiveDir(archiveDir))
 
 	// Trigger lazy archive creation by appending a message.
 	mgr.archiveAppend(1, spawnllm.Message{Role: "user", Content: "hello"})
@@ -162,7 +163,7 @@ func TestReset_ArchiveContinuesAfterNewMessages(t *testing.T) {
 	const key = "test-session"
 	archiveDir := t.TempDir()
 	store := newResetStore(key)
-	mgr := newResetManager(store, key, WithArchiveDir(archiveDir))
+	mgr := newResetManager(t, store, key, WithArchiveDir(archiveDir))
 
 	// Write a few messages to the archive before reset, keyed by memory seq.
 	for i := range 3 {
@@ -207,7 +208,7 @@ func TestReset_ClearsPendingTurn(t *testing.T) {
 		onClear:   func() { called = true },
 	}
 
-	mgr := newResetManagerWithStore(trackingStore, key)
+	mgr := newResetManagerWithStore(t, trackingStore, key)
 
 	if err := mgr.Reset(context.Background()); err != nil {
 		t.Fatalf("Reset returned error: %v", err)
@@ -231,7 +232,8 @@ func (s *clearPendingTrackingStore) ClearPendingTurn(_ string) error {
 }
 
 // newResetManagerWithStore constructs a Manager using any SessionStore.
-func newResetManagerWithStore(store session.SessionStore, sessionKey string, opts ...Option) *Manager {
+func newResetManagerWithStore(t testing.TB, store session.SessionStore, sessionKey string, opts ...Option) *Manager {
+	t.Helper()
 	baseOpts := []Option{
 		WithContextWindow(10000),
 		WithNormalPercent(90),
@@ -240,5 +242,5 @@ func newResetManagerWithStore(store session.SessionStore, sessionKey string, opt
 	}
 	baseOpts = append(baseOpts, opts...)
 	cm := New(sessionKey, store, baseOpts...)
-	return cm.(*Manager)
+	return asManager(t, cm)
 }

@@ -25,7 +25,7 @@ type memMgr struct {
 
 func newMemMgr(t *testing.T, store *mockStore, stable, routed string) memMgr {
 	t.Helper()
-	m := New("test-session", store, WithContextWindow(100_000)).(*Manager)
+	m := asManager(t, New("test-session", store, WithContextWindow(100_000)))
 	return memMgr{Manager: m, stable: stable, routed: routed}
 }
 
@@ -45,11 +45,11 @@ func (m memMgr) Build(ctx context.Context) ([]spawnllm.Message, error) {
 // user message, after the whole history.
 func TestRoutedMemory_RidesOnTheCurrentTurn(t *testing.T) {
 	store := newMockStore()
-	store.SetHistory("test-session", []spawnllm.Message{
+	noErr(t, store.SetHistory("test-session", []spawnllm.Message{
 		{Role: "user", Content: "older question"},
 		{Role: "assistant", Content: "older answer"},
 		{Role: "user", Content: "current question"},
-	})
+	}))
 
 	msgs, err := newMemMgr(t, store, "STABLEBLOCK", "ROUTEDBLOCK").Build(context.Background())
 	if err != nil {
@@ -83,7 +83,7 @@ func TestRoutedMemory_RidesOnTheCurrentTurn(t *testing.T) {
 // would gain one stale memory dump per turn, silently and cumulatively.
 func TestRoutedMemory_NeverPersisted(t *testing.T) {
 	store := newMockStore()
-	store.SetHistory("test-session", []spawnllm.Message{{Role: "user", Content: "question"}})
+	noErr(t, store.SetHistory("test-session", []spawnllm.Message{{Role: "user", Content: "question"}}))
 
 	mgr := newMemMgr(t, store, "STABLEBLOCK", "ROUTEDBLOCK")
 	for range 3 {
@@ -107,11 +107,13 @@ func TestRoutedMemory_NeverPersisted(t *testing.T) {
 // breaks on every dispatch of the turn.
 func TestRoutedMemory_StableAcrossRepeatedBuilds(t *testing.T) {
 	store := newMockStore()
-	store.SetHistory("test-session", []spawnllm.Message{{Role: "user", Content: "question"}})
+	noErr(t, store.SetHistory("test-session", []spawnllm.Message{{Role: "user", Content: "question"}}))
 	mgr := newMemMgr(t, store, "STABLEBLOCK", "ROUTEDBLOCK")
 
-	first, _ := mgr.Build(context.Background())
-	second, _ := mgr.Build(context.Background())
+	first, err := mgr.Build(context.Background())
+	noErr(t, err)
+	second, err := mgr.Build(context.Background())
+	noErr(t, err)
 
 	if len(first) != len(second) {
 		t.Fatalf("builds differ in length: %d vs %d", len(first), len(second))
@@ -131,11 +133,11 @@ func TestRoutedMemory_StableAcrossRepeatedBuilds(t *testing.T) {
 // result, a shape every provider accepts.
 func TestRoutedMemory_AfterToolPlumbing(t *testing.T) {
 	store := newMockStore()
-	store.SetHistory("test-session", []spawnllm.Message{
+	noErr(t, store.SetHistory("test-session", []spawnllm.Message{
 		{Role: "user", Content: "go"},
 		{Role: "assistant", ToolCalls: []spawnllm.ToolCall{{ID: "t1"}}},
 		{Role: "tool", ToolCallID: "t1", Content: "tool output"},
-	})
+	}))
 
 	msgs, err := newMemMgr(t, store, "STABLEBLOCK", "ROUTEDBLOCK").Build(context.Background())
 	if err != nil {
@@ -154,7 +156,7 @@ func TestRoutedInjection_EmptyIsNoop(t *testing.T) {
 		t.Errorf("routedInjection = %q, want empty", got)
 	}
 	store := newMockStore()
-	store.SetHistory("test-session", []spawnllm.Message{{Role: "user", Content: "question"}})
+	noErr(t, store.SetHistory("test-session", []spawnllm.Message{{Role: "user", Content: "question"}}))
 	msgs, err := newMemMgr(t, store, "STABLEBLOCK", "").Build(context.Background())
 	if err != nil {
 		t.Fatal(err)

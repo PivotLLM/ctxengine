@@ -147,10 +147,10 @@ func TestWithMaxSummaryTokensOption(t *testing.T) {
 // SummaryTokens when a summary is stored.
 func TestStats_SummaryTokensPopulated(t *testing.T) {
 	store := newMockStore()
-	m := newTestManager(store, WithContextWindow(128000))
+	m := newTestManager(t, store, WithContextWindow(128000))
 
 	// newTestManager uses sessionKey "test-session" — inject on the correct key.
-	store.SetSummary("test-session", `{"version":2,"state":{"goals":[{"text":"test","refs":[{"seq_start":1}]}]},"covered_seq_start":0,"covered_seq_end":5,"generated_at":"2026-01-01T00:00:00Z"}`)
+	noErr(t, store.SetSummary("test-session", `{"version":2,"state":{"goals":[{"text":"test","refs":[{"seq_start":1}]}]},"covered_seq_start":0,"covered_seq_end":5,"generated_at":"2026-01-01T00:00:00Z"}`))
 
 	stats := m.Stats()
 	if stats.SummaryTokens == 0 {
@@ -162,7 +162,7 @@ func TestStats_SummaryTokensPopulated(t *testing.T) {
 // SummaryTokens when no summary exists.
 func TestStats_SummaryTokensZeroWithoutSummary(t *testing.T) {
 	store := newMockStore()
-	m := newTestManager(store, WithContextWindow(128000))
+	m := newTestManager(t, store, WithContextWindow(128000))
 
 	stats := m.Stats()
 	if stats.SummaryTokens != 0 {

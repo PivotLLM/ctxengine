@@ -24,6 +24,17 @@ func argPolicy() EvictionPolicy {
 // storedArgs returns the persisted (Function-form) arguments of the call with
 // the given id, decoded. Reading the persisted form rather than the runtime map
 // is the point: that is what a provider replays.
+// stringArgT returns args[key], failing the test if it is absent or not a
+// string.
+func stringArgT(t *testing.T, args map[string]any, key string) string {
+	t.Helper()
+	s, ok := args[key].(string)
+	if !ok {
+		t.Fatalf("argument %q is %T, want string", key, args[key])
+	}
+	return s
+}
+
 func storedArgs(t *testing.T, store *seqStore, id string) map[string]any {
 	t.Helper()
 	for _, sm := range store.GetHistoryWithSeqs("sess") {
@@ -69,7 +80,7 @@ func TestSweepArgs_EvictsAgedWritePayload(t *testing.T) {
 	payload := strings.Repeat("p", 40_000)
 	store := newSeqStore(bigWriteHistory(payload, 12))
 
-	events := newEvictMgr(store, argPolicy()).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, argPolicy()).SweepEvictions(context.Background())
 
 	var found *EvictionEvent
 	for i := range events {
@@ -88,7 +99,7 @@ func TestSweepArgs_EvictsAgedWritePayload(t *testing.T) {
 	}
 
 	args := storedArgs(t, store, "w1")
-	content, _ := args["content"].(string)
+	content := stringArgT(t, args, "content")
 	if !isEvicted(content) {
 		t.Errorf("payload not replaced by a placeholder: %.80q", content)
 	}
@@ -106,9 +117,9 @@ func TestSweepArgs_ProtectsRecentWrite(t *testing.T) {
 	payload := strings.Repeat("p", 40_000)
 	store := newSeqStore(bigWriteHistory(payload, 2)) // well inside EvictTurns
 
-	newEvictMgr(store, argPolicy()).SweepEvictions(context.Background())
+	newEvictMgr(t, store, argPolicy()).SweepEvictions(context.Background())
 
-	if content, _ := storedArgs(t, store, "w1")["content"].(string); isEvicted(content) {
+	if content := stringArgT(t, storedArgs(t, store, "w1"), "content"); isEvicted(content) {
 		t.Error("a recent write payload must not be evicted")
 	}
 }
@@ -119,10 +130,9 @@ func TestSweepArgs_ProtectsRecentWrite(t *testing.T) {
 func TestSweepArgs_LeavesSmallArgsAlone(t *testing.T) {
 	store := newSeqStore(bigWriteHistory(strings.Repeat("p", 100), 12))
 
-	newEvictMgr(store, argPolicy()).SweepEvictions(context.Background())
+	newEvictMgr(t, store, argPolicy()).SweepEvictions(context.Background())
 
-	args := storedArgs(t, store, "w1")
-	if content, _ := args["content"].(string); isEvicted(content) {
+	if content := stringArgT(t, storedArgs(t, store, "w1"), "content"); isEvicted(content) {
 		t.Error("a 100-byte argument is not a payload and must not be evicted")
 	}
 }
@@ -133,9 +143,9 @@ func TestSweepArgs_Disabled(t *testing.T) {
 	p.ArgBytes = 0
 	store := newSeqStore(bigWriteHistory(strings.Repeat("p", 40_000), 12))
 
-	newEvictMgr(store, p).SweepEvictions(context.Background())
+	newEvictMgr(t, store, p).SweepEvictions(context.Background())
 
-	if content, _ := storedArgs(t, store, "w1")["content"].(string); isEvicted(content) {
+	if content := stringArgT(t, storedArgs(t, store, "w1"), "content"); isEvicted(content) {
 		t.Error("ArgBytes=0 must disable argument eviction")
 	}
 }
@@ -145,7 +155,7 @@ func TestSweepArgs_Disabled(t *testing.T) {
 // turn forever and shrink the placeholder into nonsense.
 func TestSweepArgs_Idempotent(t *testing.T) {
 	store := newSeqStore(bigWriteHistory(strings.Repeat("p", 40_000), 12))
-	mgr := newEvictMgr(store, argPolicy())
+	mgr := newEvictMgr(t, store, argPolicy())
 
 	first := mgr.SweepEvictions(context.Background())
 	firstAfter := storedArgs(t, store, "w1")["content"]
@@ -179,7 +189,7 @@ func TestSweepArgs_MCPToolCovered(t *testing.T) {
 	}
 	store := newSeqStore(buildHistory(specs...))
 
-	events := newEvictMgr(store, argPolicy()).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, argPolicy()).SweepEvictions(context.Background())
 
 	var sawArgs bool
 	for _, e := range events {
@@ -193,7 +203,7 @@ func TestSweepArgs_MCPToolCovered(t *testing.T) {
 	if !sawArgs {
 		t.Fatalf("an MCP tool's oversized argument must be evicted; got %+v", events)
 	}
-	if text, _ := storedArgs(t, store, "m1")["text"].(string); !isEvicted(text) {
+	if text := stringArgT(t, storedArgs(t, store, "m1"), "text"); !isEvicted(text) {
 		t.Error("MCP payload not evicted")
 	}
 	if got := storedArgs(t, store, "m1")["section_id"]; got != "s1" {
@@ -216,7 +226,7 @@ func TestEvictLargeArgs_KeepsRuntimeMapInStep(t *testing.T) {
 	if got := evictLargeArgs(&tc, 1024, DefaultEvictionRoles()); len(got) != 1 {
 		t.Fatalf("expected 1 argument evicted, got %d", len(got))
 	}
-	runtime, _ := tc.Arguments["content"].(string)
+	runtime := stringArgT(t, tc.Arguments, "content")
 	if !isEvicted(runtime) {
 		t.Errorf("runtime Arguments map left stale: %.60q", runtime)
 	}

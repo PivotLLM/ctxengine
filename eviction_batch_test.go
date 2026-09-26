@@ -39,7 +39,7 @@ func TestSweep_BatchedBelowThreshold(t *testing.T) {
 
 	// One 5000-byte stale read: below the threshold, deferred.
 	small := newSeqStore(staleReads(1, 5000))
-	mgr := New("sess", small, WithContextWindow(100_000), WithEvictionPolicy(p)).(*Manager)
+	mgr := asManager(t, New("sess", small, WithContextWindow(100_000), WithEvictionPolicy(p)))
 	asm, err := mgr.Assemble(ctx, AssembleRequest{})
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestSweep_BatchedBelowThreshold(t *testing.T) {
 
 	// Five of them: 25 000 bytes clears the threshold and all five go.
 	big := newSeqStore(staleReads(5, 5000))
-	mgr = New("sess", big, WithContextWindow(100_000), WithEvictionPolicy(p)).(*Manager)
+	mgr = asManager(t, New("sess", big, WithContextWindow(100_000), WithEvictionPolicy(p)))
 	asm, err = mgr.Assemble(ctx, AssembleRequest{})
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestSweep_ExplicitSweepIgnoresThreshold(t *testing.T) {
 	p := basePolicy()
 	p.MinSweepPercent = 5
 	store := newSeqStore(staleReads(1, 5000))
-	mgr := New("sess", store, WithContextWindow(100_000), WithEvictionPolicy(p)).(*Manager)
+	mgr := asManager(t, New("sess", store, WithContextWindow(100_000), WithEvictionPolicy(p)))
 	if events := mgr.SweepEvictions(context.Background()); len(events) != 1 {
 		t.Fatalf("explicit sweep applied %d evictions, want 1", len(events))
 	}
@@ -89,7 +89,7 @@ func TestSweep_AppliedAtCompaction(t *testing.T) {
 	p.MinSweepPercent = 5
 	store := newSeqStore(staleReads(1, 5000))
 	// No model: the pass reports "nothing", but the sweep at its start runs.
-	mgr := New("sess", store, WithContextWindow(100_000), WithEvictionPolicy(p)).(*Manager)
+	mgr := asManager(t, New("sess", store, WithContextWindow(100_000), WithEvictionPolicy(p)))
 	if err := mgr.Compact(context.Background()); err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestSweep_AppliedAtCompaction(t *testing.T) {
 // leaves it unset) applies every sweep at once, the previous behaviour.
 func TestSweep_ThresholdDisabled(t *testing.T) {
 	store := newSeqStore(staleReads(1, 50))
-	mgr := New("sess", store, WithContextWindow(100_000), WithEvictionPolicy(basePolicy())).(*Manager)
+	mgr := asManager(t, New("sess", store, WithContextWindow(100_000), WithEvictionPolicy(basePolicy())))
 	asm, err := mgr.Assemble(context.Background(), AssembleRequest{})
 	if err != nil {
 		t.Fatal(err)

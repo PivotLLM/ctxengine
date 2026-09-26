@@ -59,13 +59,24 @@ var promptSeqRE = regexp.MustCompile(`(?m)^\[#(\d+)\] \[`)
 
 // promptSeqs returns the seqs named by the [#N] prefixes of a summarization
 // prompt, in prompt order.
-func promptSeqs(user string) []int64 {
+func promptSeqs(user string) ([]int64, error) {
 	var out []int64
 	for _, m := range promptSeqRE.FindAllStringSubmatch(user, -1) {
-		n, _ := strconv.ParseInt(m[1], 10, 64)
+		n, err := strconv.ParseInt(m[1], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("prompt seq %q: %w", m[1], err)
+		}
 		out = append(out, n)
 	}
-	return out
+	return out, nil
+}
+
+// mustPromptSeqs is promptSeqs for a test body.
+func mustPromptSeqs(t *testing.T, user string) []int64 {
+	t.Helper()
+	seqs, err := promptSeqs(user)
+	noErr(t, err)
+	return seqs
 }
 
 func (s *e2eSummarizer) Complete(_ context.Context, req ModelRequest) (ModelReply, error) {
@@ -73,7 +84,10 @@ func (s *e2eSummarizer) Complete(_ context.Context, req ModelRequest) (ModelRepl
 	if s.fail {
 		return ModelReply{Content: "I have nothing structured to say.", Model: s.model}, nil
 	}
-	seqs := promptSeqs(req.User)
+	seqs, err := promptSeqs(req.User)
+	if err != nil {
+		return ModelReply{}, err
+	}
 	if len(seqs) == 0 {
 		return ModelReply{Content: "{}", Model: s.model}, nil
 	}
@@ -150,7 +164,7 @@ func e2eDB(t *testing.T, dir string) *sql.DB {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { noErr(t, db.Close()) })
 	return db
 }
 
@@ -330,7 +344,7 @@ func runE2EConversation(t *testing.T, dir string, sum *e2eSummarizer, extra ...O
 	ctx := context.Background()
 	store := e2eStore(t, dir)
 	s := &e2eSession{t: t, dir: dir, store: store, sum: sum}
-	s.mgr = New(e2eKey, store, e2eOpts(dir, sum, extra...)...).(*Manager)
+	s.mgr = asManager(t, New(e2eKey, store, e2eOpts(dir, sum, extra...)...))
 
 	for turn := 1; turn <= 15; turn++ {
 		s.add(s.mgr.AddUserMessage(ctx, spawnllm.Message{
@@ -374,8 +388,8 @@ func TestE2E_FullLoopCompactsOnRealStore(t *testing.T) {
 	dir := t.TempDir()
 	sum := &e2eSummarizer{model: "e2e-model"}
 	s := runE2EConversation(t, dir, sum)
-	defer s.store.Close()
-	defer s.mgr.Close(context.Background())
+	defer func() { noErr(t, s.store.Close()) }()
+	defer func() { noErr(t, s.mgr.Close(context.Background())) }()
 
 	// Exactly one compaction, mid-conversation, and every Assemble was clean.
 	if len(sum.requests) != 1 {
@@ -470,7 +484,7 @@ func TestE2E_FullLoopCompactsOnRealStore(t *testing.T) {
 	if n := queryInt(t, db, "SELECT count(*) FROM summaries"); n != 1 {
 		t.Fatalf("summaries rows = %d, want 1", n)
 	}
-	cited := promptSeqs(sum.requests[0].User)
+	cited := mustPromptSeqs(t, sum.requests[0].User)
 	wantEnd := cited[len(cited)-1]
 	var srcStart, srcEnd, covStart, covEnd int64
 	if err := db.QueryRow("SELECT source_seq_start, source_seq_end, covered_seq_start, covered_seq_end FROM summaries").Scan(&srcStart, &srcEnd, &covStart, &covEnd); err != nil {
@@ -532,9 +546,9 @@ func TestE2E_CloseAndReopenPreservesState(t *testing.T) {
 	}
 
 	store2 := e2eStore(t, dir)
-	defer store2.Close()
-	mgr2 := New(e2eKey, store2, e2eOpts(dir, sum)...).(*Manager)
-	defer mgr2.Close(ctx)
+	defer func() { noErr(t, store2.Close()) }()
+	mgr2 := asManager(t, New(e2eKey, store2, e2eOpts(dir, sum)...))
+	defer func() { noErr(t, mgr2.Close(ctx)) }()
 
 	after := mgr2.Stats()
 	if after.TotalMessages != before.TotalMessages || after.MeaningfulMessages != before.MeaningfulMessages ||
@@ -591,7 +605,7 @@ func seedParallelGroupHistory(t *testing.T, dir string) {
 	t.Helper()
 	ctx := context.Background()
 	store := e2eStore(t, dir)
-	mgr := New(e2eKey, store, WithArchiveDir(dir), WithContextWindow(1_000_000), WithMessageThreshold(0)).(*Manager)
+	mgr := asManager(t, New(e2eKey, store, WithArchiveDir(dir), WithContextWindow(1_000_000), WithMessageThreshold(0)))
 	small := func(role, text string) spawnllm.Message { return spawnllm.Message{Role: role, Content: pad(text, 40)} }
 	big := strings.Repeat("z", 2000)
 	must := func(seq int64, err error) {
@@ -654,9 +668,9 @@ func TestE2E_WellFormedAfterSafetyNetCompaction(t *testing.T) {
 
 	sum := &e2eSummarizer{model: "e2e-model"}
 	store := e2eStore(t, dir)
-	defer store.Close()
-	mgr := New(e2eKey, store, tightOpts(dir, sum)...).(*Manager)
-	defer mgr.Close(ctx)
+	defer func() { noErr(t, store.Close()) }()
+	mgr := asManager(t, New(e2eKey, store, tightOpts(dir, sum)...))
+	defer func() { noErr(t, mgr.Close(ctx)) }()
 
 	asm, err := mgr.Assemble(ctx, e2eRequest())
 	if err != nil {
@@ -671,7 +685,7 @@ func TestE2E_WellFormedAfterSafetyNetCompaction(t *testing.T) {
 	assertWellFormed(t, asm.Messages)
 
 	// The whole group went to the summary: #1-#6 summarized, #7-#9 retained.
-	if got := promptSeqs(sum.requests[0].User); !slices.Equal(got, []int64{1, 2, 3, 4, 5, 6}) {
+	if got := mustPromptSeqs(t, sum.requests[0].User); !slices.Equal(got, []int64{1, 2, 3, 4, 5, 6}) {
 		t.Errorf("summarized seqs = %v, want #1-#6 (the group whole)", got)
 	}
 	window := store.GetHistoryWithSeqs(e2eKey)
@@ -709,9 +723,9 @@ func TestE2E_WellFormedAfterSafetyNetDrop(t *testing.T) {
 	}
 	failing := &mockLLM{model: "down", errors: failures}
 	store := e2eStore(t, dir)
-	defer store.Close()
-	mgr := New(e2eKey, store, tightOpts(dir, chainOf([]*mockLLM{failing}))...).(*Manager)
-	defer mgr.Close(ctx)
+	defer func() { noErr(t, store.Close()) }()
+	mgr := asManager(t, New(e2eKey, store, tightOpts(dir, chainOf([]*mockLLM{failing}))...))
+	defer func() { noErr(t, mgr.Close(ctx)) }()
 
 	asm, err := mgr.Assemble(ctx, e2eRequest())
 	if err != nil {
@@ -758,9 +772,9 @@ func TestE2E_WellFormedAfterForceCompress(t *testing.T) {
 	seedParallelGroupHistory(t, dir)
 
 	store := e2eStore(t, dir)
-	defer store.Close()
-	mgr := New(e2eKey, store, tightOpts(dir, &e2eSummarizer{model: "e2e-model"})...).(*Manager)
-	defer mgr.Close(ctx)
+	defer func() { noErr(t, store.Close()) }()
+	mgr := asManager(t, New(e2eKey, store, tightOpts(dir, &e2eSummarizer{model: "e2e-model"})...))
+	defer func() { noErr(t, mgr.Close(ctx)) }()
 
 	if err := mgr.ForceCompress(ctx); err != nil {
 		t.Fatalf("ForceCompress: %v", err)
@@ -809,9 +823,9 @@ func TestE2E_ForceCompressKeepsWindowSeqsInArchive(t *testing.T) {
 	seedParallelGroupHistory(t, dir)
 
 	store := e2eStore(t, dir)
-	defer store.Close()
-	mgr := New(e2eKey, store, tightOpts(dir, &e2eSummarizer{model: "e2e-model"})...).(*Manager)
-	defer mgr.Close(ctx)
+	defer func() { noErr(t, store.Close()) }()
+	mgr := asManager(t, New(e2eKey, store, tightOpts(dir, &e2eSummarizer{model: "e2e-model"})...))
+	defer func() { noErr(t, mgr.Close(ctx)) }()
 
 	if err := mgr.ForceCompress(ctx); err != nil {
 		t.Fatalf("ForceCompress: %v", err)
@@ -840,8 +854,8 @@ func TestE2E_SeqStabilityAcrossCompaction(t *testing.T) {
 	ctx := context.Background()
 	sum := &e2eSummarizer{model: "e2e-model"}
 	s := runE2EConversation(t, dir, sum)
-	defer s.store.Close()
-	defer s.mgr.Close(ctx)
+	defer func() { noErr(t, s.store.Close()) }()
+	defer func() { noErr(t, s.mgr.Close(ctx)) }()
 	if s.compactedAfterSeq == 0 {
 		t.Fatal("no compaction ran")
 	}
@@ -896,16 +910,16 @@ func TestE2E_EvictionObservedThroughAssemble(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 	store := e2eStore(t, dir)
-	defer store.Close()
+	defer func() { noErr(t, store.Close()) }()
 	// A 20k-token window: the default batch threshold (5% of the window in
 	// bytes, 4000 here) is under the 5000-byte read, so the sweep applies it.
-	mgr := New(e2eKey, store,
+	mgr := asManager(t, New(e2eKey, store,
 		WithArchiveDir(dir),
 		WithContextWindow(20_000),
 		WithMessageThreshold(0),
 		WithModelCaller(&e2eSummarizer{model: "e2e-model"}),
-	).(*Manager)
-	defer mgr.Close(ctx)
+	))
+	defer func() { noErr(t, mgr.Close(ctx)) }()
 
 	must := func(seq int64, err error) int64 {
 		t.Helper()
@@ -1060,7 +1074,7 @@ func TestE2E_ResetContinueCompactReopen(t *testing.T) {
 	if len(sum.requests) != 2 {
 		t.Fatalf("summarizer called %d times, want 2", len(sum.requests))
 	}
-	cited := promptSeqs(sum.requests[1].User)
+	cited := mustPromptSeqs(t, sum.requests[1].User)
 	if cited[0] != preMax+1 {
 		t.Errorf("post-Reset compaction summarized from #%d, want #%d", cited[0], preMax+1)
 	}
@@ -1096,9 +1110,9 @@ func TestE2E_ResetContinueCompactReopen(t *testing.T) {
 		t.Fatalf("store.Close: %v", err)
 	}
 	store2 := e2eStore(t, dir)
-	defer store2.Close()
-	mgr2 := New(e2eKey, store2, e2eOpts(dir, sum)...).(*Manager)
-	defer mgr2.Close(ctx)
+	defer func() { noErr(t, store2.Close()) }()
+	mgr2 := asManager(t, New(e2eKey, store2, e2eOpts(dir, sum)...))
+	defer func() { noErr(t, mgr2.Close(ctx)) }()
 	if got := mgr2.RenderedSummary(); got != renderedBefore || got == "" {
 		t.Errorf("RenderedSummary after reopen = %q, want %q", got, renderedBefore)
 	}
@@ -1131,9 +1145,9 @@ func TestE2E_ManagerConcurrencySmoke(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 	store := e2eStore(t, dir)
-	defer store.Close()
+	defer func() { noErr(t, store.Close()) }()
 	sum := &e2eSummarizer{model: "e2e-model"}
-	mgr := New(e2eKey, store,
+	mgr := asManager(t, New(e2eKey, store,
 		WithArchiveDir(dir),
 		WithModelCaller(sum),
 		WithContextWindow(200_000),
@@ -1142,16 +1156,20 @@ func TestE2E_ManagerConcurrencySmoke(t *testing.T) {
 		WithRetainMaxTokens(200),
 		WithRetainMinMessages(2),
 		WithMessageThreshold(0),
-	).(*Manager)
-	defer mgr.Close(ctx)
+	))
+	defer func() { noErr(t, mgr.Close(ctx)) }()
 
 	// Seed so the compaction has something to summarize.
 	var added atomic.Int64
 	for i := range 10 {
-		if seq, _ := mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: pad(fmt.Sprintf("seed user %d ", i), 200)}); seq > 0 {
+		seq, err := mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: pad(fmt.Sprintf("seed user %d ", i), 200)})
+		noErr(t, err)
+		if seq > 0 {
 			added.Add(1)
 		}
-		if seq, _ := mgr.AddAssistantMessage(ctx, spawnllm.Message{Role: "assistant", Content: pad(fmt.Sprintf("seed assistant %d ", i), 200)}); seq > 0 {
+		seq, err = mgr.AddAssistantMessage(ctx, spawnllm.Message{Role: "assistant", Content: pad(fmt.Sprintf("seed assistant %d ", i), 200)})
+		noErr(t, err)
+		if seq > 0 {
 			added.Add(1)
 		}
 	}
@@ -1173,11 +1191,19 @@ func TestE2E_ManagerConcurrencySmoke(t *testing.T) {
 		wg.Add(1)
 		go guard(fmt.Sprintf("writer %d", w), func() {
 			for i := range perWriter {
-				var seq int64
+				var (
+					seq int64
+					err error
+				)
 				if i%2 == 0 {
-					seq, _ = mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: fmt.Sprintf("writer %d message %d", w, i)})
+					seq, err = mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: fmt.Sprintf("writer %d message %d", w, i)})
 				} else {
-					seq, _ = mgr.AddAssistantMessage(ctx, spawnllm.Message{Role: "assistant", Content: fmt.Sprintf("writer %d reply %d", w, i)})
+					seq, err = mgr.AddAssistantMessage(ctx, spawnllm.Message{Role: "assistant", Content: fmt.Sprintf("writer %d reply %d", w, i)})
+				}
+				// A failed Add is allowed under contention; the archive
+				// check below counts only the Adds that minted a seq.
+				if err != nil {
+					t.Logf("writer %d add %d: %v", w, i, err)
 				}
 				if seq > 0 {
 					added.Add(1)
@@ -1257,10 +1283,10 @@ func TestE2E_NoiseKeyCollapsesCronFires(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 	store := e2eStore(t, dir)
-	defer store.Close()
+	defer func() { noErr(t, store.Close()) }()
 	store.SetNoiseKey(cronmsg.CollapseKey)
 	sum := &e2eSummarizer{model: "e2e-model"}
-	mgr := New(e2eKey, store,
+	mgr := asManager(t, New(e2eKey, store,
 		WithArchiveDir(dir),
 		WithModelCaller(sum),
 		WithContextWindow(3000),
@@ -1270,8 +1296,8 @@ func TestE2E_NoiseKeyCollapsesCronFires(t *testing.T) {
 		WithRetainMinMessages(1),
 		WithMessageThreshold(0),
 		WithNoiseKey(cronmsg.CollapseKey),
-	).(*Manager)
-	defer mgr.Close(ctx)
+	))
+	defer func() { noErr(t, mgr.Close(ctx)) }()
 
 	seqs := cronFires(t, mgr, 4)
 	state, err := store.GetCompactionState(e2eKey)
@@ -1304,7 +1330,7 @@ func TestE2E_NoiseKeyCollapsesCronFires(t *testing.T) {
 	if n := strings.Count(prompt, "self-check: anything new?"); n != 0 {
 		t.Errorf("summarizer prompt still carries %d raw fires", n)
 	}
-	if got := promptSeqs(prompt); !slices.Equal(got, []int64{seqs[0]}) {
+	if got := mustPromptSeqs(t, prompt); !slices.Equal(got, []int64{seqs[0]}) {
 		t.Errorf("prompt seqs = %v, want just the anchor's %d", got, seqs[0])
 	}
 }
@@ -1315,9 +1341,9 @@ func TestE2E_NoNoiseKeyCountsEveryFire(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 	store := e2eStore(t, dir)
-	defer store.Close()
+	defer func() { noErr(t, store.Close()) }()
 	sum := &e2eSummarizer{model: "e2e-model"}
-	mgr := New(e2eKey, store,
+	mgr := asManager(t, New(e2eKey, store,
 		WithArchiveDir(dir),
 		WithModelCaller(sum),
 		WithContextWindow(3000),
@@ -1326,8 +1352,8 @@ func TestE2E_NoNoiseKeyCountsEveryFire(t *testing.T) {
 		WithRetainMaxTokens(1),
 		WithRetainMinMessages(1),
 		WithMessageThreshold(0),
-	).(*Manager)
-	defer mgr.Close(ctx)
+	))
+	defer func() { noErr(t, mgr.Close(ctx)) }()
 
 	cronFires(t, mgr, 4)
 	state, err := store.GetCompactionState(e2eKey)
@@ -1362,9 +1388,9 @@ func TestE2E_NoiseAwareCountSurvivesClose(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 	store := e2eStore(t, dir)
-	defer store.Close()
+	defer func() { noErr(t, store.Close()) }()
 	store.SetNoiseKey(cronmsg.CollapseKey)
-	mgr := New(e2eKey, store, WithArchiveDir(dir), WithContextWindow(100_000), WithMessageThreshold(0), WithNoiseKey(cronmsg.CollapseKey)).(*Manager)
+	mgr := asManager(t, New(e2eKey, store, WithArchiveDir(dir), WithContextWindow(100_000), WithMessageThreshold(0), WithNoiseKey(cronmsg.CollapseKey)))
 
 	cronFires(t, mgr, 4)
 	if got := mgr.Stats().MeaningfulMessages; got != 2 {
@@ -1393,8 +1419,8 @@ func TestE2E_CompactionReporterDeliversToLastAssembleChannel(t *testing.T) {
 	s := runE2EConversation(t, dir, sum, WithCompactionReporter(func(channel, chatID, text string) {
 		deliveries = append(deliveries, delivery{channel, chatID, text})
 	}))
-	defer s.store.Close()
-	defer s.mgr.Close(context.Background())
+	defer func() { noErr(t, s.store.Close()) }()
+	defer func() { noErr(t, s.mgr.Close(context.Background())) }()
 
 	if len(deliveries) != 1 {
 		t.Fatalf("reporter called %d times, want 1: %+v", len(deliveries), deliveries)
@@ -1430,7 +1456,7 @@ func refusalFixture(t *testing.T, classifier RefusalClassifier) (*Manager, *sess
 	t.Helper()
 	dir := t.TempDir()
 	store := e2eStore(t, dir)
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { noErr(t, store.Close()) })
 	refuser := &mockLLM{model: "m-refuser", responses: slices.Repeat([]string{"NOPE-CUSTOM: this session is off limits"}, 12)}
 	worker := &mockLLM{model: "m-worker", responses: []string{validSummaryJSON("first pass"), validSummaryJSON("second pass")}}
 	rec := &excludeRecorder{inner: chainOf([]*mockLLM{refuser, worker})}
@@ -1446,8 +1472,8 @@ func refusalFixture(t *testing.T, classifier RefusalClassifier) (*Manager, *sess
 	if classifier != nil {
 		opts = append(opts, WithRefusalClassifier(classifier))
 	}
-	mgr := New(e2eKey, store, opts...).(*Manager)
-	t.Cleanup(func() { mgr.Close(context.Background()) })
+	mgr := asManager(t, New(e2eKey, store, opts...))
+	t.Cleanup(func() { noErr(t, mgr.Close(context.Background())) })
 	return mgr, store, rec, refuser
 }
 
@@ -1553,10 +1579,10 @@ func TestE2E_FailureDumpOnlyForFailingPass(t *testing.T) {
 	}
 	ctx := context.Background()
 	store := e2eStore(t, dir)
-	defer store.Close()
+	defer func() { noErr(t, store.Close()) }()
 	sum := &e2eSummarizer{model: "e2e-model"}
 	dumps := 0
-	mgr := New(e2eKey, store,
+	mgr := asManager(t, New(e2eKey, store,
 		WithArchiveDir(dir),
 		WithModelCaller(sum),
 		WithContextWindow(3000),
@@ -1572,24 +1598,27 @@ func TestE2E_FailureDumpOnlyForFailingPass(t *testing.T) {
 			}
 			return os.WriteFile(filepath.Join(dumpDir, fmt.Sprintf("%s-%02d.json", kind, dumps)), body, 0o600)
 		}),
-	).(*Manager)
-	defer mgr.Close(ctx)
+	))
+	defer func() { noErr(t, mgr.Close(ctx)) }()
 
 	addTurns(t, mgr, "good", 5)
 	if err := mgr.Compact(ctx); err != nil {
 		t.Fatalf("succeeding Compact: %v", err)
 	}
-	if files, _ := os.ReadDir(dumpDir); len(files) != 0 {
+	files, err := os.ReadDir(dumpDir)
+	noErr(t, err)
+	if len(files) != 0 {
 		t.Fatalf("%d dump files after a succeeding pass, want 0", len(files))
 	}
 
 	sum.fail = true
 	addTurns(t, mgr, "bad", 5)
-	err := mgr.Compact(ctx)
+	err = mgr.Compact(ctx)
 	if !errors.Is(err, ErrCompressionFailed) {
 		t.Fatalf("failing Compact returned %v, want ErrCompressionFailed", err)
 	}
-	files, _ := os.ReadDir(dumpDir)
+	files, err = os.ReadDir(dumpDir)
+	noErr(t, err)
 	if len(files) == 0 {
 		t.Fatal("no dump files after a failing pass")
 	}
@@ -1644,7 +1673,7 @@ func TestE2E_HostSettingsSurviveCompactionCloseAndReset(t *testing.T) {
 	ctx := context.Background()
 	sum := &e2eSummarizer{model: "e2e-model"}
 	s := runE2EConversation(t, dir, sum)
-	defer s.store.Close()
+	defer func() { noErr(t, s.store.Close()) }()
 
 	st, err := s.store.GetCompactionState(e2eKey)
 	if err != nil {
@@ -1683,7 +1712,7 @@ func TestE2E_HostSettingsSurviveCompactionCloseAndReset(t *testing.T) {
 	}
 	check("after Close", countBefore)
 
-	reopened := New(e2eKey, s.store, e2eOpts(dir, sum)...).(*Manager)
+	reopened := asManager(t, New(e2eKey, s.store, e2eOpts(dir, sum)...))
 	if err := reopened.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
@@ -1706,9 +1735,9 @@ func TestE2E_StaleSummaryIsNotCheckpointedAgain(t *testing.T) {
 
 	sum := &e2eSummarizer{model: "e2e-model"}
 	store := e2eStore(t, dir)
-	defer store.Close()
-	mgr := New(e2eKey, store, tightOpts(dir, sum)...).(*Manager)
-	defer mgr.Close(ctx)
+	defer func() { noErr(t, store.Close()) }()
+	mgr := asManager(t, New(e2eKey, store, tightOpts(dir, sum)...))
+	defer func() { noErr(t, mgr.Close(ctx)) }()
 
 	if _, err := mgr.Assemble(ctx, e2eRequest()); err != nil {
 		t.Fatalf("Assemble: %v", err)

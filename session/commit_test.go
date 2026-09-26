@@ -70,7 +70,9 @@ func TestCommitCompaction(t *testing.T) {
 	if got := s.GetSummary("c"); got != summary {
 		t.Errorf("summary after drop-only commit = %q, want unchanged", got)
 	}
-	if metas, _ := a.ListSummaries(); len(metas) != 1 {
+	metas, err = a.ListSummaries()
+	noErr(t, err)
+	if len(metas) != 1 {
 		t.Errorf("checkpoints after drop-only commit = %d, want still 1", len(metas))
 	}
 	if window := s.GetHistoryWithSeqs("c"); len(window) != 2 || window[0].Seq != 5 || window[1].Seq != 6 {

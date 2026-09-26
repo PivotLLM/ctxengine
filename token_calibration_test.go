@@ -18,7 +18,7 @@ func TestTokenSafetyMargin_Default(t *testing.T) {
 	if got := SettingsFromOptions().TokenSafetyMargin; got != 1.15 {
 		t.Fatalf("default token safety margin = %v, want 1.15", got)
 	}
-	m := New("s", newMockStore()).(*Manager)
+	m := asManager(t, New("s", newMockStore()))
 	if got := m.tokenMargin(); got != 1.15 {
 		t.Fatalf("uncalibrated tokenMargin = %v, want the 1.15 default", got)
 	}
@@ -28,7 +28,7 @@ func TestTokenSafetyMargin_Default(t *testing.T) {
 // margin only after enough observations, tracks the observed ratio, and is
 // clamped between the static margin (floor) and calibrationMaxMargin.
 func TestObserveUsage_ConvergesAndClamps(t *testing.T) {
-	m := New("s", newMockStore()).(*Manager)
+	m := asManager(t, New("s", newMockStore()))
 
 	// Fewer than the minimum observations: still the static margin.
 	for range calibrationMinObservations - 1 {
@@ -84,8 +84,8 @@ func TestObserveUsage_CalibratedMarginDrivesPreBuildCheck(t *testing.T) {
 	// contextWindow=1000, safety=80 → line at 800 tokens. 2600 chars is 650
 	// raw tokens: 747 under the 1.15 margin (fits), 975 at a 1.5 ratio.
 	store := newMockStore()
-	store.SetHistory("s", []spawnllm.Message{{Role: "user", Content: strings.Repeat("a", 2600)}})
-	m := New("s", store, WithContextWindow(1000), WithOverheadTokens(0), WithSafetyPercent(80)).(*Manager)
+	noErr(t, store.SetHistory("s", []spawnllm.Message{{Role: "user", Content: strings.Repeat("a", 2600)}}))
+	m := asManager(t, New("s", store, WithContextWindow(1000), WithOverheadTokens(0), WithSafetyPercent(80)))
 	var fired []bool
 	m.SetTestCompressHook(func(safetyNet bool) { fired = append(fired, safetyNet) })
 

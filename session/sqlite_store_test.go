@@ -42,7 +42,7 @@ func openStore(t *testing.T, dir string) *SQLiteStore {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { noErr(t, s.Close()) })
 	return s
 }
 
@@ -60,8 +60,8 @@ func TestNewSQLiteStore_CreatesDirectory(t *testing.T) {
 
 func TestAddAndGetHistory(t *testing.T) {
 	s := newStore(t)
-	s.AddMessage("s1", "user", "hello")
-	s.AddMessage("s1", "assistant", "hi")
+	noErr(t, s.AddMessage("s1", "user", "hello"))
+	noErr(t, s.AddMessage("s1", "assistant", "hi"))
 
 	history := s.GetHistory("s1")
 	if len(history) != 2 {
@@ -127,7 +127,7 @@ func TestSeqMinting(t *testing.T) {
 	}
 
 	// Truncation preserves the seqs of the survivors and the counter.
-	s.TruncateHistory("seq", 3)
+	noErr(t, s.TruncateHistory("seq", 3))
 	stored = s.GetHistoryWithSeqs("seq")
 	if len(stored) != 3 || stored[0].Seq != 3 || stored[2].Seq != 5 {
 		t.Fatalf("after truncate: %+v", stored)
@@ -140,7 +140,7 @@ func TestSeqMinting(t *testing.T) {
 func TestAddMessage_StampsCreatedAt(t *testing.T) {
 	s := newStore(t)
 	before := time.Now().UTC()
-	s.AddMessage("stamp", "user", "hello")
+	noErr(t, s.AddMessage("stamp", "user", "hello"))
 	mustAdd(t, s, "stamp", spawnllm.Message{Role: "assistant", Content: "hi"})
 	after := time.Now().UTC()
 
@@ -168,8 +168,8 @@ func TestGetHistory_EmptySession(t *testing.T) {
 
 func TestSessionIsolation(t *testing.T) {
 	s := newStore(t)
-	s.AddMessage("s1", "user", "session1")
-	s.AddMessage("telegram:1/2", "user", "session2")
+	noErr(t, s.AddMessage("s1", "user", "session1"))
+	noErr(t, s.AddMessage("telegram:1/2", "user", "session2"))
 
 	if h := s.GetHistory("s1"); len(h) != 1 || h[0].Content != "session1" {
 		t.Errorf("s1: %+v", h)
@@ -187,7 +187,7 @@ func TestSummary(t *testing.T) {
 	if got := s.GetSummary("s1"); got != "" {
 		t.Errorf("got %q, want empty", got)
 	}
-	s.SetSummary("s1", "test summary")
+	noErr(t, s.SetSummary("s1", "test summary"))
 	if got := s.GetSummary("s1"); got != "test summary" {
 		t.Errorf("got %q, want %q", got, "test summary")
 	}
@@ -208,10 +208,10 @@ func TestSummary(t *testing.T) {
 func TestTruncateHistory(t *testing.T) {
 	s := newStore(t)
 	for i := range 10 {
-		s.AddMessage("trunc", "user", string(rune('a'+i)))
+		noErr(t, s.AddMessage("trunc", "user", string(rune('a'+i))))
 	}
 
-	s.TruncateHistory("trunc", 4)
+	noErr(t, s.TruncateHistory("trunc", 4))
 	history := s.GetHistory("trunc")
 	if len(history) != 4 {
 		t.Fatalf("expected 4, got %d", len(history))
@@ -221,7 +221,7 @@ func TestTruncateHistory(t *testing.T) {
 	}
 
 	// Keep more than exists keeps all.
-	s.TruncateHistory("trunc", 100)
+	noErr(t, s.TruncateHistory("trunc", 100))
 	if got := len(s.GetHistory("trunc")); got != 4 {
 		t.Errorf("keep 100: got %d, want 4", got)
 	}
@@ -235,18 +235,20 @@ func TestTruncateHistory(t *testing.T) {
 	}
 
 	// keepLast <= 0 empties the window and resets the compression counters.
-	st, _ := s.GetCompactionState("trunc")
+	st, err := s.GetCompactionState("trunc")
+	noErr(t, err)
 	st.CompressedAtMeaningfulCount = 3
 	st.Cooling = true
 	st.ActiveModelIndex = 2
 	if err := s.SetCompactionState("trunc", st); err != nil {
 		t.Fatal(err)
 	}
-	s.TruncateHistory("trunc", 0)
+	noErr(t, s.TruncateHistory("trunc", 0))
 	if got := len(s.GetHistory("trunc")); got != 0 {
 		t.Errorf("keep 0: got %d, want 0", got)
 	}
-	st, _ = s.GetCompactionState("trunc")
+	st, err = s.GetCompactionState("trunc")
+	noErr(t, err)
 	if st.MeaningfulCount != 0 || st.CompressedAtMeaningfulCount != 0 || st.Cooling {
 		t.Errorf("counters not reset: %+v", st)
 	}
@@ -262,15 +264,15 @@ func TestTruncateHistory(t *testing.T) {
 func TestSetHistory_ReplacesWithFreshSeqs(t *testing.T) {
 	s := newStore(t)
 	for range 5 {
-		s.AddMessage("replace", "user", "old")
+		noErr(t, s.AddMessage("replace", "user", "old"))
 	}
-	s.TruncateHistory("replace", 2)
+	noErr(t, s.TruncateHistory("replace", 2))
 
 	before := time.Now().UTC()
-	s.SetHistory("replace", []spawnllm.Message{
+	noErr(t, s.SetHistory("replace", []spawnllm.Message{
 		{Role: "user", Content: "new1"},
 		{Role: "assistant", Content: "new2"},
-	})
+	}))
 	after := time.Now().UTC()
 
 	stored := s.GetHistoryWithSeqs("replace")
@@ -294,11 +296,11 @@ func TestSetHistory_ReplacesWithFreshSeqs(t *testing.T) {
 func TestSetHistoryWithSeqs_PreservesStableSeqs(t *testing.T) {
 	s := newStore(t)
 	for i := range 5 {
-		s.AddMessage("preserve", "user", string(rune('a'+i)))
+		noErr(t, s.AddMessage("preserve", "user", string(rune('a'+i))))
 	}
 	active := s.GetHistoryWithSeqs("preserve")
 	tail := active[3:]
-	s.SetHistoryWithSeqs("preserve", tail)
+	noErr(t, s.SetHistoryWithSeqs("preserve", tail))
 
 	stored := s.GetHistoryWithSeqs("preserve")
 	if len(stored) != 2 || stored[0].Seq != 4 || stored[1].Seq != 5 {
@@ -318,21 +320,21 @@ func TestSetHistoryWithSeqs_PreservesStableSeqs(t *testing.T) {
 func TestSetHistoryWithSeqs_NextSeqMonotonic(t *testing.T) {
 	s := newStore(t)
 	for range 5 {
-		s.AddMessage("mono", "user", "m")
+		noErr(t, s.AddMessage("mono", "user", "m"))
 	}
 	// Only low seqs retained: the counter must stay at 5.
-	s.SetHistoryWithSeqs("mono", []memory.StoredMessage{
+	noErr(t, s.SetHistoryWithSeqs("mono", []memory.StoredMessage{
 		memory.NewStoredMessage(1, spawnllm.Message{Role: "user", Content: "one"}),
-	})
+	}))
 	if seq := mustAdd(t, s, "mono", spawnllm.Message{Role: "user", Content: "six"}); seq != 6 {
 		t.Errorf("seq after low rewrite = %d, want 6", seq)
 	}
 
 	// Unnumbered messages are minted after the highest seen (here 9 > counter 6).
-	s.SetHistoryWithSeqs("mono", []memory.StoredMessage{
+	noErr(t, s.SetHistoryWithSeqs("mono", []memory.StoredMessage{
 		memory.NewStoredMessage(9, spawnllm.Message{Role: "user", Content: "nine"}),
 		{Message: spawnllm.Message{Role: "assistant", Content: "unnumbered"}},
-	})
+	}))
 	stored := s.GetHistoryWithSeqs("mono")
 	if len(stored) != 2 || stored[0].Seq != 9 || stored[1].Seq != 10 {
 		t.Fatalf("stored = %+v", stored)
@@ -348,13 +350,13 @@ func TestSetHistoryWithSeqs_NextSeqMonotonic(t *testing.T) {
 func TestMeaningfulCount_ConsecutiveDuplicates(t *testing.T) {
 	s := newStore(t)
 	for i := range 3 {
-		s.AddMessage("mc", "user", string(rune('a'+i)))
+		noErr(t, s.AddMessage("mc", "user", string(rune('a'+i))))
 	}
 	// Two duplicates of the last message (same role and content) are noise.
-	s.AddMessage("mc", "user", "c")
-	s.AddMessage("mc", "user", "c")
+	noErr(t, s.AddMessage("mc", "user", "c"))
+	noErr(t, s.AddMessage("mc", "user", "c"))
 	// Same content from another role is not.
-	s.AddMessage("mc", "assistant", "c")
+	noErr(t, s.AddMessage("mc", "assistant", "c"))
 
 	if got := len(s.GetHistory("mc")); got != 6 {
 		t.Errorf("window = %d, want 6", got)
@@ -378,18 +380,22 @@ func TestSetNoiseKey(t *testing.T) {
 
 	off := newStore(t)
 	for _, ts := range fires {
-		off.AddMessage("k", "user", fire(ts))
+		noErr(t, off.AddMessage("k", "user", fire(ts)))
 	}
-	if st, _ := off.GetCompactionState("k"); st.MeaningfulCount != 2 {
+	st, err := off.GetCompactionState("k")
+	noErr(t, err)
+	if st.MeaningfulCount != 2 {
 		t.Errorf("without a noise key MeaningfulCount = %d, want 2", st.MeaningfulCount)
 	}
 
 	on := newStore(t)
 	on.SetNoiseKey(cronmsg.CollapseKey)
 	for _, ts := range fires {
-		on.AddMessage("k", "user", fire(ts))
+		noErr(t, on.AddMessage("k", "user", fire(ts)))
 	}
-	if st, _ := on.GetCompactionState("k"); st.MeaningfulCount != 1 {
+	st, err = on.GetCompactionState("k")
+	noErr(t, err)
+	if st.MeaningfulCount != 1 {
 		t.Errorf("with the noise key MeaningfulCount = %d, want 1", st.MeaningfulCount)
 	}
 }
@@ -398,7 +404,7 @@ func TestCompactionState_RoundTripAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 	const key = "agent:alice:main"
 	s := openStore(t, dir)
-	s.AddMessage(key, "user", "hi")
+	noErr(t, s.AddMessage(key, "user", "hi"))
 
 	want := memory.CompactionState{
 		MeaningfulCount:             7,
@@ -414,7 +420,7 @@ func TestCompactionState_RoundTripAcrossReopen(t *testing.T) {
 	if err := s.SetCompactionState(key, want); err != nil {
 		t.Fatalf("SetCompactionState: %v", err)
 	}
-	s.Close()
+	noErr(t, s.Close())
 
 	s2 := openStore(t, dir)
 	got, err := s2.GetCompactionState(key)
@@ -437,7 +443,7 @@ func TestPersistence_AcrossInstances(t *testing.T) {
 	if err := s1.SetSummary("persist", "a test session"); err != nil {
 		t.Fatalf("SetSummary: %v", err)
 	}
-	s1.Close()
+	noErr(t, s1.Close())
 
 	s2 := openStore(t, dir)
 	history := s2.GetHistoryWithSeqs("persist")
@@ -461,12 +467,12 @@ func TestPendingTurn(t *testing.T) {
 	}
 
 	// Session A: set and left set.
-	s.AddMessage("session-a", "user", "hello")
+	noErr(t, s.AddMessage("session-a", "user", "hello"))
 	if err := s.SetPendingTurn("session-a"); err != nil {
 		t.Fatalf("SetPendingTurn: %v", err)
 	}
 	// Session B: set then cleared.
-	s.AddMessage("session-b", "user", "hi")
+	noErr(t, s.AddMessage("session-b", "user", "hi"))
 	if err := s.SetPendingTurn("session-b"); err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +480,7 @@ func TestPendingTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Session C: never marked.
-	s.AddMessage("session-c", "user", "hey")
+	noErr(t, s.AddMessage("session-c", "user", "hey"))
 	// Session D: marked pending before any message exists.
 	if err := s.SetPendingTurn("agent:bob:main"); err != nil {
 		t.Fatal(err)
@@ -489,9 +495,10 @@ func TestPendingTurn(t *testing.T) {
 	}
 
 	// The flag is durable: a fresh store sees it.
-	s.Close()
+	noErr(t, s.Close())
 	s2 := openStore(t, s.dir)
-	keys, _ = s2.ListPendingSessions()
+	keys, err = s2.ListPendingSessions()
+	noErr(t, err)
 	if len(keys) != 2 {
 		t.Errorf("pending after reopen = %v", keys)
 	}
@@ -507,7 +514,7 @@ func TestListPendingSessions_DirectoryNotExist(t *testing.T) {
 
 func TestGetArchiveBounds(t *testing.T) {
 	s := newStore(t)
-	s.AddMessage("s1", "user", "a")
+	noErr(t, s.AddMessage("s1", "user", "a"))
 	// The window is not the archive: nothing archived yet.
 	if lo, hi := s.GetArchiveBounds("s1"); lo != 0 || hi != 0 {
 		t.Errorf("bounds with empty archive = %d,%d want 0,0", lo, hi)
@@ -526,7 +533,7 @@ func TestGetArchiveBounds(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	a.Close()
+	noErr(t, a.Close())
 	if lo, hi := s.GetArchiveBounds("s1"); lo != 3 || hi != 5 {
 		t.Errorf("bounds = %d,%d want 3,5", lo, hi)
 	}
@@ -535,7 +542,7 @@ func TestGetArchiveBounds(t *testing.T) {
 func TestForgetSession(t *testing.T) {
 	s := newStore(t)
 	const key = "telegram_42"
-	s.AddMessage(key, "user", "hello")
+	noErr(t, s.AddMessage(key, "user", "hello"))
 
 	s.mu.Lock()
 	_, present := s.sessions[key]
@@ -555,11 +562,13 @@ func TestForgetSession(t *testing.T) {
 
 	// Durable data is untouched and the database reopens on access; the
 	// noise cache restarts empty, so the duplicate counts as meaningful.
-	s.AddMessage(key, "user", "hello")
+	noErr(t, s.AddMessage(key, "user", "hello"))
 	if hist := s.GetHistory(key); len(hist) != 2 {
 		t.Fatalf("history altered by ForgetSession: %+v", hist)
 	}
-	if st, _ := s.GetCompactionState(key); st.MeaningfulCount != 2 {
+	st, err := s.GetCompactionState(key)
+	noErr(t, err)
+	if st.MeaningfulCount != 2 {
 		t.Errorf("MeaningfulCount = %d, want 2 (cache dropped)", st.MeaningfulCount)
 	}
 
@@ -582,7 +591,7 @@ func TestConcurrent_AddAndRead(t *testing.T) {
 	for range goroutines {
 		wg.Go(func() {
 			for i := range perGoroutine {
-				s.AddMessage("concurrent", "user", fmt.Sprintf("msg %d", i))
+				noErr(t, s.AddMessage("concurrent", "user", fmt.Sprintf("msg %d", i)))
 				_ = s.GetHistory("concurrent")
 			}
 		})
@@ -590,8 +599,8 @@ func TestConcurrent_AddAndRead(t *testing.T) {
 	// A summariser truncating concurrently, as in the agent loop.
 	wg.Go(func() {
 		for range 10 {
-			s.SetSummary("concurrent", "summary")
-			s.TruncateHistory("concurrent", 50)
+			noErr(t, s.SetSummary("concurrent", "summary"))
+			noErr(t, s.TruncateHistory("concurrent", 50))
 			s.ForgetSession("concurrent")
 		}
 	})
@@ -603,7 +612,9 @@ func TestConcurrent_AddAndRead(t *testing.T) {
 			t.Fatalf("seqs not increasing at %d: %+v", i, stored)
 		}
 	}
-	if st, _ := s.GetCompactionState("concurrent"); st.MeaningfulCount == 0 {
+	st, err := s.GetCompactionState("concurrent")
+	noErr(t, err)
+	if st.MeaningfulCount == 0 {
 		t.Error("expected meaningful messages")
 	}
 	if s.GetSummary("concurrent") != "summary" {

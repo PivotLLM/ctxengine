@@ -65,7 +65,7 @@ func TestItem1_LargeMsgRemovedBeforePersist(t *testing.T) {
 	}
 	llm := &mockLLM{errors: errList}
 
-	mgr := newCompressManager(store, []*mockLLM{llm},
+	mgr := newCompressManager(t, store, []*mockLLM{llm},
 		WithContextWindow(1000),
 		WithSafetyPercent(80),
 		WithRetainMinMessages(0),
@@ -95,7 +95,7 @@ func TestItem1_PersistResultReturnsErrorOnSaveFailure(t *testing.T) {
 		responses: []string{validSummaryJSON("goal")},
 	}
 
-	mgr := newCompressManager(&store.compressTestStore, []*mockLLM{llm},
+	mgr := newCompressManager(t, &store.compressTestStore, []*mockLLM{llm},
 		WithContextWindow(10000),
 		WithNormalPercent(50),
 		WithSafetyPercent(80),
@@ -156,7 +156,7 @@ func TestItem3_ForceCompress_ToolLoopNoOrphanedMessages(t *testing.T) {
 
 	store := &compressTestStore{history: history}
 
-	mgr := newCompressManager(store, nil,
+	mgr := newCompressManager(t, store, nil,
 		WithContextWindow(200),
 		WithSafetyPercent(80),
 	)
@@ -232,7 +232,7 @@ func TestItem3_ForceCompress_OversizedResultInCurrentTurnIsTruncated(t *testing.
 
 	store := &compressTestStore{history: history}
 
-	mgr := newCompressManager(store, nil,
+	mgr := newCompressManager(t, store, nil,
 		WithContextWindow(100),
 		WithSafetyPercent(80),
 	)
@@ -280,7 +280,7 @@ func TestItem3_ForceCompress_OversizedCurrentTurnReturnsError(t *testing.T) {
 
 	store := &compressTestStore{history: history}
 
-	mgr := newCompressManager(store, nil,
+	mgr := newCompressManager(t, store, nil,
 		WithContextWindow(100),
 		WithSafetyPercent(80),
 	)

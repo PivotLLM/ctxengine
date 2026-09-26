@@ -43,7 +43,10 @@ func (s *citingSummarizer) Complete(_ context.Context, req ctxengine.ModelReques
 	s.requests = append(s.requests, req)
 	var seqs []int64
 	for _, m := range toolsPromptSeqRE.FindAllStringSubmatch(req.User, -1) {
-		n, _ := strconv.ParseInt(m[1], 10, 64)
+		n, err := strconv.ParseInt(m[1], 10, 64)
+		if err != nil {
+			return ctxengine.ModelReply{}, fmt.Errorf("prompt seq %q: %w", m[1], err)
+		}
 		seqs = append(seqs, n)
 	}
 	if len(seqs) == 0 {
@@ -67,7 +70,7 @@ func TestE2E_ToolsReadTheEngineArchive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer store.Close()
+	defer func() { noErr(t, store.Close()) }()
 	sum := &citingSummarizer{}
 	mgr := ctxengine.New(e2eToolsKey, store,
 		ctxengine.WithArchiveDir(dir),
@@ -78,7 +81,7 @@ func TestE2E_ToolsReadTheEngineArchive(t *testing.T) {
 		ctxengine.WithRetainMinMessages(2),
 		ctxengine.WithMessageThreshold(0),
 	)
-	defer mgr.Close(ctx)
+	defer func() { noErr(t, mgr.Close(ctx)) }()
 
 	must := func(seq int64, err error) int64 {
 		t.Helper()
