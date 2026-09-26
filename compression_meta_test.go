@@ -161,7 +161,7 @@ func TestCompact_OnDemandStampsProfile(t *testing.T) {
 
 	store := &compressTestStore{history: makeConversation(10, 200)}
 	llm := &mockLLM{responses: []string{validSummaryJSON("active goal")}}
-	mgr := newCompressManager(store, []*mockLLM{llm},
+	mgr := newCompressManager(t, store, []*mockLLM{llm},
 		WithCompressionProfileDir(dir),
 		WithCompressModel(ModelChain{Primary: "test-model"}),
 	)
@@ -191,7 +191,7 @@ func TestCompact_OnDemandStampsProfile(t *testing.T) {
 func TestCompact_NoProfile(t *testing.T) {
 	store := &compressTestStore{history: makeConversation(10, 200)}
 	llm := &mockLLM{responses: []string{validSummaryJSON("active goal")}}
-	mgr := newCompressManager(store, []*mockLLM{llm})
+	mgr := newCompressManager(t, store, []*mockLLM{llm})
 	mgr.msgCount = len(store.history)
 
 	if err := mgr.Compact(context.Background()); err != nil {

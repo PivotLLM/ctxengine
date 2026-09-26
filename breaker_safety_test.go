@@ -22,8 +22,10 @@ func failingLLM(n int) *mockLLM {
 // tripBreaker fails the automatic path until the breaker trips.
 func tripBreaker(t *testing.T, mgr *Manager) {
 	t.Helper()
-	for i := 0; i < defaultMaxConsecutiveCompactFailures; i++ {
-		_ = mgr.compress(context.Background(), false)
+	for range defaultMaxConsecutiveCompactFailures {
+		if err := mgr.compress(context.Background(), false); err == nil {
+			t.Fatal("compress against a failing model returned nil")
+		}
 	}
 	if !mgr.autoCompactionSuppressed() {
 		t.Fatal("breaker did not trip after the failure threshold")
@@ -41,7 +43,7 @@ func TestBreaker_SafetyNetBypassesBreaker(t *testing.T) {
 	// chars = 4000 chars ≈ 1000 tokens: the window is at 100%.
 	store := &compressTestStore{history: makeConversation(10, 200)}
 	llm := failingLLM(60)
-	mgr := newCompressManager(store, []*mockLLM{llm}, WithContextWindow(1000))
+	mgr := newCompressManager(t, store, []*mockLLM{llm}, WithContextWindow(1000))
 	mgr.msgCount = len(store.history)
 
 	tripBreaker(t, mgr)
@@ -70,7 +72,7 @@ func TestBreaker_SafetyNetBypassesBreaker(t *testing.T) {
 func TestBreaker_NormalPathStillSuppressed(t *testing.T) {
 	store := &compressTestStore{history: makeConversation(10, 200)}
 	llm := failingLLM(60)
-	mgr := newCompressManager(store, []*mockLLM{llm})
+	mgr := newCompressManager(t, store, []*mockLLM{llm})
 	mgr.msgCount = len(store.history)
 
 	tripBreaker(t, mgr)
@@ -94,18 +96,22 @@ func TestBreaker_TrippedHookFires(t *testing.T) {
 		failures int
 	}
 	var trips []trip
-	mgr := newCompressManager(store, []*mockLLM{llm}, WithBreakerTrippedHook(func(key string, failures int) {
+	mgr := newCompressManager(t, store, []*mockLLM{llm}, WithBreakerTrippedHook(func(key string, failures int) {
 		trips = append(trips, trip{key, failures})
 	}))
 	mgr.msgCount = len(store.history)
 
-	for i := 0; i < defaultMaxConsecutiveCompactFailures-1; i++ {
-		_ = mgr.compress(context.Background(), false)
+	for range defaultMaxConsecutiveCompactFailures - 1 {
+		if err := mgr.compress(context.Background(), false); err == nil {
+			t.Fatal("compress against a failing model returned nil")
+		}
 	}
 	if len(trips) != 0 {
 		t.Fatalf("hook fired before the threshold: %+v", trips)
 	}
-	_ = mgr.compress(context.Background(), false)
+	if err := mgr.compress(context.Background(), false); err == nil {
+		t.Fatal("compress against a failing model returned nil")
+	}
 	if len(trips) != 1 {
 		t.Fatalf("hook fired %d times, want once", len(trips))
 	}
@@ -114,7 +120,7 @@ func TestBreaker_TrippedHookFires(t *testing.T) {
 	}
 
 	// Further suppressed attempts do not re-fire the hook.
-	_ = mgr.compress(context.Background(), false)
+	noErr(t, mgr.compress(context.Background(), false))
 	if len(trips) != 1 {
 		t.Errorf("hook re-fired while already tripped: %d calls", len(trips))
 	}

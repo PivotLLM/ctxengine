@@ -3,7 +3,10 @@
 
 package ctxengine
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // refusalFinishReasons are provider stop reasons that unambiguously signal the
 // model declined to produce output on content-policy grounds.
@@ -48,10 +51,8 @@ var refusalMarkers = []string{
 // appending "I'm sorry, but I cannot…", truncating the result.
 func defaultRefusalClassifier(finishReason, content string) (bool, string) {
 	if fr := strings.ToLower(strings.TrimSpace(finishReason)); fr != "" {
-		for _, r := range refusalFinishReasons {
-			if fr == r {
-				return true, "content policy (finish_reason=" + fr + ")"
-			}
+		if slices.Contains(refusalFinishReasons, fr) {
+			return true, "content policy (finish_reason=" + fr + ")"
 		}
 	}
 	lc := strings.ToLower(content)

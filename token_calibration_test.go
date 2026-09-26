@@ -18,7 +18,7 @@ func TestTokenSafetyMargin_Default(t *testing.T) {
 	if got := SettingsFromOptions().TokenSafetyMargin; got != 1.15 {
 		t.Fatalf("default token safety margin = %v, want 1.15", got)
 	}
-	m := New("s", newMockStore()).(*Manager)
+	m := asManager(t, New("s", newMockStore()))
 	if got := m.tokenMargin(); got != 1.15 {
 		t.Fatalf("uncalibrated tokenMargin = %v, want the 1.15 default", got)
 	}
@@ -28,10 +28,10 @@ func TestTokenSafetyMargin_Default(t *testing.T) {
 // margin only after enough observations, tracks the observed ratio, and is
 // clamped between the static margin (floor) and calibrationMaxMargin.
 func TestObserveUsage_ConvergesAndClamps(t *testing.T) {
-	m := New("s", newMockStore()).(*Manager)
+	m := asManager(t, New("s", newMockStore()))
 
 	// Fewer than the minimum observations: still the static margin.
-	for i := 0; i < calibrationMinObservations-1; i++ {
+	for range calibrationMinObservations - 1 {
 		m.ObserveUsage(1000, 1500)
 	}
 	if got := m.tokenMargin(); got != 1.15 {
@@ -43,7 +43,7 @@ func TestObserveUsage_ConvergesAndClamps(t *testing.T) {
 	}
 
 	// Converges toward a new steady ratio.
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		m.ObserveUsage(1000, 1250)
 	}
 	if got := m.tokenMargin(); math.Abs(got-1.25) > 0.01 {
@@ -51,7 +51,7 @@ func TestObserveUsage_ConvergesAndClamps(t *testing.T) {
 	}
 
 	// Ceiling.
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		m.ObserveUsage(1000, 6000)
 	}
 	if got := m.tokenMargin(); got != calibrationMaxMargin {
@@ -60,7 +60,7 @@ func TestObserveUsage_ConvergesAndClamps(t *testing.T) {
 
 	// Floor: a provider that counts fewer tokens than the heuristic never
 	// pulls the margin under the configured value.
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		m.ObserveUsage(1000, 500)
 	}
 	if got := m.tokenMargin(); got != 1.15 {
@@ -84,8 +84,8 @@ func TestObserveUsage_CalibratedMarginDrivesPreBuildCheck(t *testing.T) {
 	// contextWindow=1000, safety=80 → line at 800 tokens. 2600 chars is 650
 	// raw tokens: 747 under the 1.15 margin (fits), 975 at a 1.5 ratio.
 	store := newMockStore()
-	store.SetHistory("s", []spawnllm.Message{{Role: "user", Content: strings.Repeat("a", 2600)}})
-	m := New("s", store, WithContextWindow(1000), WithOverheadTokens(0), WithSafetyPercent(80)).(*Manager)
+	noErr(t, store.SetHistory("s", []spawnllm.Message{{Role: "user", Content: strings.Repeat("a", 2600)}}))
+	m := asManager(t, New("s", store, WithContextWindow(1000), WithOverheadTokens(0), WithSafetyPercent(80)))
 	var fired []bool
 	m.SetTestCompressHook(func(safetyNet bool) { fired = append(fired, safetyNet) })
 
@@ -100,7 +100,7 @@ func TestObserveUsage_CalibratedMarginDrivesPreBuildCheck(t *testing.T) {
 		t.Fatalf("PromptTokenEstimate = %d, want the raw 650 (no margin)", asm.PromptTokenEstimate)
 	}
 
-	for i := 0; i < calibrationMinObservations; i++ {
+	for range calibrationMinObservations {
 		m.ObserveUsage(asm.PromptTokenEstimate, 975)
 	}
 	if _, err := m.Assemble(context.Background(), AssembleRequest{}); err != nil {

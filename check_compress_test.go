@@ -5,6 +5,7 @@ package ctxengine
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,18 +13,18 @@ import (
 )
 
 // newCheckCompressManager builds a Manager for CheckAndCompress tests.
-func newCheckCompressManager(store *mockStore, clients []*mockLLM, opts ...Option) *Manager {
-	baseOpts := []Option{
+func newCheckCompressManager(t *testing.T, store *mockStore, clients []*mockLLM, opts ...Option) *Manager {
+	t.Helper()
+	baseOpts := slices.Concat([]Option{
 		WithContextWindow(10000),
 		WithNormalPercent(50),
 		WithSafetyPercent(80),
 		WithRetainTokenPercent(20),
 		WithRetainMinMessages(2),
 		WithModelCaller(chainOf(clients)),
-	}
-	baseOpts = append(baseOpts, opts...)
+	}, opts)
 	cm := New("sess", store, baseOpts...)
-	return cm.(*Manager)
+	return asManager(t, cm)
 }
 
 // TestCheckAndCompress_BelowThreshold verifies that CheckAndCompress returns the
@@ -36,10 +37,10 @@ func TestCheckAndCompress_BelowThreshold(t *testing.T) {
 	small := []spawnllm.Message{
 		{Role: "user", Content: strings.Repeat("a", 400)},
 	}
-	store.SetHistory("sess", small)
+	noErr(t, store.SetHistory("sess", small))
 
 	compressed := false
-	mgr := newCheckCompressManager(store, nil,
+	mgr := newCheckCompressManager(t, store, nil,
 		WithContextWindow(10000),
 		WithNormalPercent(50),
 		WithOverheadTokens(200),
@@ -74,10 +75,10 @@ func TestCheckAndCompress_OverheadPushesOverSafety(t *testing.T) {
 	built := []spawnllm.Message{
 		{Role: "user", Content: strings.Repeat("b", 1600)},
 	}
-	store.SetHistory("sess", built)
+	noErr(t, store.SetHistory("sess", built))
 
 	var hookCalls []bool
-	mgr := newCheckCompressManager(store, nil,
+	mgr := newCheckCompressManager(t, store, nil,
 		WithContextWindow(1000),
 		WithNormalPercent(50),
 		WithSafetyPercent(80),
@@ -109,10 +110,10 @@ func TestCheckAndCompress_NormalBand_DoesNotFire(t *testing.T) {
 	// 2400 chars → 600 tokens content; overhead 0 → 600 tokens = 60% of 1000:
 	// above normalPercent (50%), below safetyPercent (80%).
 	history := makeConversation(6, 200)
-	store.SetHistory("sess", history)
+	noErr(t, store.SetHistory("sess", history))
 
 	compressed := false
-	mgr := newCheckCompressManager(store, nil,
+	mgr := newCheckCompressManager(t, store, nil,
 		WithContextWindow(1000),
 		WithNormalPercent(50),
 		WithSafetyPercent(80),
@@ -139,7 +140,7 @@ func TestCheckAndCompress_NormalBand_DoesNotFire(t *testing.T) {
 // TestCheckAndCompress_NoContextWindow returns input unchanged when contextWindow == 0.
 func TestCheckAndCompress_NoContextWindow(t *testing.T) {
 	store := newMockStore()
-	mgr := newCheckCompressManager(store, nil,
+	mgr := newCheckCompressManager(t, store, nil,
 		WithContextWindow(0),
 	)
 	built := makeConversation(5, 500)
@@ -161,13 +162,13 @@ func TestCheckAndCompress_CompressionFiredReturnsFreshSlice(t *testing.T) {
 	// contextWindow = 1000. safetyPercent = 80 → trigger at 800 tokens.
 	// Built: 2000 chars → 500 tokens. overheadTokens = 400 → 900 tokens → 90% → triggers.
 	history := makeConversation(5, 200)
-	store.SetHistory("sess", history)
+	noErr(t, store.SetHistory("sess", history))
 
 	llm := &mockLLM{
 		responses: []string{validSummaryJSON("fresh slice goal")},
 	}
 
-	mgr := newCheckCompressManager(store, []*mockLLM{llm},
+	mgr := newCheckCompressManager(t, store, []*mockLLM{llm},
 		WithContextWindow(1000),
 		WithNormalPercent(50),
 		WithSafetyPercent(80),
@@ -225,10 +226,10 @@ func TestCheckAndCompress_NormalBandWithCooldown_DoesNotFire(t *testing.T) {
 	store := newMockStore()
 	// Above normalPercent (50%) at 60% with no overhead — still below safety (80%).
 	history := makeConversation(6, 200) // 2400 chars → 600 tokens → 60% of 1000
-	store.SetHistory("sess", history)
+	noErr(t, store.SetHistory("sess", history))
 
 	compressed := false
-	mgr := newCheckCompressManager(store, nil,
+	mgr := newCheckCompressManager(t, store, nil,
 		WithContextWindow(1000),
 		WithNormalPercent(50),
 		WithSafetyPercent(80),

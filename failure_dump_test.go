@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/PivotLLM/ctxengine/logger"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/logger"
 )
 
 // captureBackend collects the engine's log events for assertions.

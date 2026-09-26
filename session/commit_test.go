@@ -7,8 +7,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 // TestCommitCompaction writes a compaction result through the store and reads
@@ -16,7 +17,7 @@ import (
 // checkpoint, the compaction counters, and a seq counter that carries on.
 func TestCommitCompaction(t *testing.T) {
 	s := newStore(t)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		mustAdd(t, s, "c", spawnllm.Message{Role: "user", Content: string(rune('a' + i))})
 	}
 	tail := s.GetHistoryWithSeqs("c")[3:] // seqs 4, 5
@@ -63,13 +64,15 @@ func TestCommitCompaction(t *testing.T) {
 	}
 
 	// A drop-only commit leaves the summary and the checkpoint log alone.
-	if err := s.CommitCompaction("c", CompactionCommit{History: s.GetHistoryWithSeqs("c")[1:]}); err != nil {
+	if err = s.CommitCompaction("c", CompactionCommit{History: s.GetHistoryWithSeqs("c")[1:]}); err != nil {
 		t.Fatalf("drop-only CommitCompaction: %v", err)
 	}
 	if got := s.GetSummary("c"); got != summary {
 		t.Errorf("summary after drop-only commit = %q, want unchanged", got)
 	}
-	if metas, _ := a.ListSummaries(); len(metas) != 1 {
+	metas, err = a.ListSummaries()
+	noErr(t, err)
+	if len(metas) != 1 {
 		t.Errorf("checkpoints after drop-only commit = %d, want still 1", len(metas))
 	}
 	if window := s.GetHistoryWithSeqs("c"); len(window) != 2 || window[0].Seq != 5 || window[1].Seq != 6 {

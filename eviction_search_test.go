@@ -12,7 +12,7 @@ import (
 // searchTurns builds a history of search turns followed by enough filler to age
 // them past EvictTurns.
 func searchTurns(specs []turnSpec, filler int) []turnSpec {
-	for i := 0; i < filler; i++ {
+	for i := range filler {
 		specs = append(specs, turnSpec{text: string(rune('a' + i))})
 	}
 	return specs
@@ -28,7 +28,7 @@ func TestSweep_SearchResultsEvictable(t *testing.T) {
 		content: strings.Repeat("m", 5_000),
 	}}, 12)...))
 
-	events := newEvictMgr(store, basePolicy()).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, basePolicy()).SweepEvictions(context.Background())
 
 	if len(events) != 1 || events[0].Tool != "file_search_lines" {
 		t.Fatalf("expected the aged search result to be evicted, got %+v", events)
@@ -48,7 +48,7 @@ func TestSweep_SearchWithoutPathEvictable(t *testing.T) {
 		content: strings.Repeat("m", 5_000),
 	}}, 12)...))
 
-	events := newEvictMgr(store, basePolicy()).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, basePolicy()).SweepEvictions(context.Background())
 	if len(events) != 1 {
 		t.Fatalf("a search with no explicit path must still be evictable, got %+v", events)
 	}
@@ -72,7 +72,7 @@ func TestSweep_DifferentQueriesDoNotSupersede(t *testing.T) {
 		},
 	))
 
-	events := newEvictMgr(store, p).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, p).SweepEvictions(context.Background())
 
 	for _, e := range events {
 		if e.Reason == "superseded" {
@@ -100,7 +100,7 @@ func TestSweep_SameQuerySupersedes(t *testing.T) {
 		},
 	))
 
-	newEvictMgr(store, p).SweepEvictions(context.Background())
+	newEvictMgr(t, store, p).SweepEvictions(context.Background())
 
 	if !isEvicted(findToolResult(store, "q1")) {
 		t.Error("re-running the same search should supersede the earlier result")
@@ -126,7 +126,7 @@ func TestSweep_WriteInvalidatesSearch(t *testing.T) {
 		},
 	))
 
-	newEvictMgr(store, p).SweepEvictions(context.Background())
+	newEvictMgr(t, store, p).SweepEvictions(context.Background())
 
 	if !isEvicted(findToolResult(store, "s1")) {
 		t.Error("a successful write must invalidate an earlier search of that file")

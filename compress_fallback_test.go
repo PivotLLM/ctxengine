@@ -43,7 +43,7 @@ func TestCompactionReport_Content(t *testing.T) {
 	rejecting := &mockLLM{model: "grok-4.3", responses: []string{invalidSummaryJSON("uncited")}}
 	valid := &mockLLM{model: "claude-haiku-4-5", responses: []string{validSummaryJSON("goal")}}
 
-	mgr := newCompressManager(store, []*mockLLM{rejecting, valid})
+	mgr := newCompressManager(t, store, []*mockLLM{rejecting, valid})
 	mgr.msgCount = len(store.history)
 
 	if err := mgr.doCompress(context.Background(), false); err != nil {
@@ -80,7 +80,7 @@ func TestCompactionReport_DebugCapture(t *testing.T) {
 	store := &compressTestStore{history: makeConversation(10, 200)}
 	llm := &mockLLM{model: "claude-haiku-4-5", responses: []string{validSummaryJSON("goal")}}
 
-	mgr := newCompressManager(store, []*mockLLM{llm},
+	mgr := newCompressManager(t, store, []*mockLLM{llm},
 		WithCompressionProfileDir(dir),
 		WithCompactDebug(true),
 	)
@@ -95,7 +95,7 @@ func TestCompactionReport_DebugCapture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected compact.jsonl: %v", err)
 	}
-	defer f.Close()
+	defer func() { noErr(t, f.Close()) }()
 
 	lines := 0
 	sc := bufio.NewScanner(f)
@@ -144,7 +144,7 @@ func TestCompress_ValidationFallback(t *testing.T) {
 	}}
 	valid := &mockLLM{model: "valid", responses: []string{validSummaryJSON("fallback goal")}}
 
-	mgr := newCompressManager(store, []*mockLLM{rejecting, valid})
+	mgr := newCompressManager(t, store, []*mockLLM{rejecting, valid})
 	mgr.msgCount = len(store.history)
 
 	err := mgr.doCompress(context.Background(), false)
@@ -169,7 +169,7 @@ func TestCompress_NothingToCompress(t *testing.T) {
 	store := &compressTestStore{history: makeConversation(1, 20)} // 2 short messages
 	llm := &mockLLM{responses: []string{validSummaryJSON("unused")}}
 
-	mgr := newCompressManager(store, []*mockLLM{llm})
+	mgr := newCompressManager(t, store, []*mockLLM{llm})
 	mgr.msgCount = len(store.history)
 
 	err := mgr.doCompress(context.Background(), false)
@@ -197,7 +197,7 @@ func TestCompress_AllRejected_Failed(t *testing.T) {
 		invalidSummaryJSON("uncited"),
 	}}
 
-	mgr := newCompressManager(store, []*mockLLM{rejecting})
+	mgr := newCompressManager(t, store, []*mockLLM{rejecting})
 	mgr.msgCount = len(store.history)
 
 	err := mgr.doCompress(context.Background(), false)
@@ -215,10 +215,10 @@ func TestCompress_AllRejected_Failed(t *testing.T) {
 // TestBreaker_RecordOutcome unit-tests the failure circuit breaker accounting.
 func TestBreaker_RecordOutcome(t *testing.T) {
 	store := &compressTestStore{}
-	mgr := newCompressManager(store, []*mockLLM{{}})
+	mgr := newCompressManager(t, store, []*mockLLM{{}})
 
 	// Failures accumulate and trip the breaker at the threshold.
-	for i := 0; i < defaultMaxConsecutiveCompactFailures; i++ {
+	for i := range defaultMaxConsecutiveCompactFailures {
 		if mgr.autoCompactionSuppressed() {
 			t.Fatalf("breaker tripped early after %d failures", i)
 		}
@@ -238,7 +238,7 @@ func TestBreaker_RecordOutcome(t *testing.T) {
 	}
 
 	// ErrNothingToCompress must not count as a failure.
-	for i := 0; i < defaultMaxConsecutiveCompactFailures+2; i++ {
+	for range defaultMaxConsecutiveCompactFailures + 2 {
 		mgr.recordCompactionOutcome(ErrNothingToCompress)
 	}
 	if mgr.autoCompactionSuppressed() {
@@ -267,12 +267,14 @@ func TestBreaker_SuppressesAutoPath(t *testing.T) {
 		errors.New("f16"), errors.New("f17"), errors.New("f18"),
 	}}
 
-	mgr := newCompressManager(store, []*mockLLM{failing})
+	mgr := newCompressManager(t, store, []*mockLLM{failing})
 	mgr.msgCount = len(store.history)
 
 	// Trip the breaker with consecutive automatic-compaction failures.
-	for i := 0; i < defaultMaxConsecutiveCompactFailures; i++ {
-		_ = mgr.compress(context.Background(), false)
+	for range defaultMaxConsecutiveCompactFailures {
+		if err := mgr.compress(context.Background(), false); err == nil {
+			t.Fatal("compress against a failing model returned nil")
+		}
 	}
 	if !mgr.autoCompactionSuppressed() {
 		t.Fatal("expected breaker tripped after repeated auto failures")
@@ -280,7 +282,7 @@ func TestBreaker_SuppressesAutoPath(t *testing.T) {
 
 	callsBefore := failing.callCount
 	// A further automatic attempt must be suppressed (no new LLM calls).
-	_ = mgr.compress(context.Background(), false)
+	noErr(t, mgr.compress(context.Background(), false))
 	if failing.callCount != callsBefore {
 		t.Errorf("expected auto path suppressed; LLM called %d more times", failing.callCount-callsBefore)
 	}

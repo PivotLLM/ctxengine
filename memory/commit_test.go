@@ -32,10 +32,13 @@ func TestCommitCompaction_AllOrNothing(t *testing.T) {
 		t.Fatalf("CommitCompaction: %v", err)
 	}
 	assertWindowSeqs(t, a, 2, 3)
-	if got, _ := a.State(); got.Summary != "first" || got.NextSeq != 3 {
+	got, err := a.State()
+	noErr(t, err)
+	if got.Summary != "first" || got.NextSeq != 3 {
 		t.Errorf("state after commit = %+v, want summary first, next_seq 3", got)
 	}
-	if metas, err := a.ListSummaries(); err != nil || len(metas) != 1 || metas[0].Model != "m" {
+	metas, err := a.ListSummaries()
+	if err != nil || len(metas) != 1 || metas[0].Model != "m" {
 		t.Fatalf("summaries after commit = %+v, %v; want one from model m", metas, err)
 	}
 
@@ -46,16 +49,18 @@ func TestCommitCompaction_AllOrNothing(t *testing.T) {
 	})
 	st.Summary = "second"
 	st.NextSeq = 4
-	err := a.CommitCompaction([]StoredMessage{msg(3, "c"), bad}, st,
+	err = a.CommitCompaction([]StoredMessage{msg(3, "c"), bad}, st,
 		&SummaryRecord{Model: "m", SourceSeqStart: 2, SourceSeqEnd: 2, Summary: "second"})
 	if err == nil {
 		t.Fatal("expected the commit to fail on an unmarshalable message")
 	}
 	assertWindowSeqs(t, a, 2, 3)
-	if got, _ := a.State(); got.Summary != "first" || got.NextSeq != 3 {
+	got, err = a.State()
+	noErr(t, err)
+	if got.Summary != "first" || got.NextSeq != 3 {
 		t.Errorf("state after failed commit = %+v, want the previous summary and next_seq", got)
 	}
-	if metas, err := a.ListSummaries(); err != nil || len(metas) != 1 {
+	if metas, err = a.ListSummaries(); err != nil || len(metas) != 1 {
 		t.Errorf("summaries after failed commit = %d, %v; want still 1", len(metas), err)
 	}
 }
@@ -69,10 +74,14 @@ func TestCommitCompaction_NoCheckpoint(t *testing.T) {
 		t.Fatalf("CommitCompaction: %v", err)
 	}
 	assertWindowSeqs(t, a, 1)
-	if got, _ := a.State(); got.Summary != "s" {
+	got, err := a.State()
+	noErr(t, err)
+	if got.Summary != "s" {
 		t.Errorf("summary = %q, want s", got.Summary)
 	}
-	if metas, _ := a.ListSummaries(); len(metas) != 0 {
+	metas, err := a.ListSummaries()
+	noErr(t, err)
+	if len(metas) != 0 {
 		t.Errorf("summaries = %d, want none", len(metas))
 	}
 }

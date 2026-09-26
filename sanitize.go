@@ -4,8 +4,9 @@
 package ctxengine
 
 import (
-	"github.com/PivotLLM/ctxengine/logger"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/logger"
 )
 
 // interruptedToolResult is the content of the result the sanitiser synthesises
@@ -55,7 +56,7 @@ func sanitizeHistoryForProvider(history []spawnllm.Message) []spawnllm.Message {
 			drops.orphanResult++
 			i++
 		case msg.Role == "assistant" && len(msg.ToolCalls) > 0:
-			g := collectToolGroup(history[i:])
+			g := collectToolGroup(msg, history[i+1:])
 			i += g.span
 			drops.strayResult += g.strays
 			if len(out) == 0 || (out[len(out)-1].Role != "user" && out[len(out)-1].Role != "tool") {
@@ -85,18 +86,18 @@ type toolGroup struct {
 	unanswered []string           // call IDs with no result, in the order the turn made them
 }
 
-// collectToolGroup gathers the group starting at history[0], which must be an
-// assistant turn with tool calls. The group extends over the contiguous tool
-// results that follow it; the first non-result ends it.
-func collectToolGroup(history []spawnllm.Message) toolGroup {
-	turn := history[0]
+// collectToolGroup gathers the group started by turn, which must be an
+// assistant turn with tool calls; following holds the history entries after
+// it. The group extends over the contiguous tool results at the head of
+// following; the first non-result ends it.
+func collectToolGroup(turn spawnllm.Message, following []spawnllm.Message) toolGroup {
 	answered := make(map[string]bool, len(turn.ToolCalls))
 	for _, tc := range turn.ToolCalls {
 		answered[tc.ID] = false
 	}
 
 	g := toolGroup{msgs: []spawnllm.Message{turn}, span: 1}
-	for _, m := range history[1:] {
+	for _, m := range following {
 		if m.Role != "tool" {
 			break
 		}

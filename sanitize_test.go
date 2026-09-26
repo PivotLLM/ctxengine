@@ -7,8 +7,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 func sanAssistantWithTools(toolIDs ...string) spawnllm.Message {
@@ -358,7 +359,7 @@ func TestBuild_InterruptedGroupLeavesStoreUntouched(t *testing.T) {
 		{Seq: 42, Message: sanToolResult("A")},
 	}
 	store := newSeqStore(stored)
-	mgr := New("sess", store, WithContextWindow(100_000)).(*Manager)
+	mgr := asManager(t, New("sess", store, WithContextWindow(100_000)))
 
 	built, err := mgr.Build(context.Background())
 	if err != nil {

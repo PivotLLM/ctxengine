@@ -28,17 +28,17 @@ func TestReadOnlyConnections_WaitOutLock(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	now := time.Now()
-	if err := a.Append(1, spawnllm.Message{Role: "user", Content: "hello archive"}, now); err != nil {
+	if err = a.Append(1, spawnllm.Message{Role: "user", Content: "hello archive"}, now); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	if _, err := a.AppendSummary(SummaryRecord{Summary: "s"}); err != nil {
+	if _, err = a.AppendSummary(SummaryRecord{Summary: "s"}); err != nil {
 		t.Fatalf("AppendSummary: %v", err)
 	}
-	if err := a.ReplaceWindow([]StoredMessage{NewStoredMessage(1, spawnllm.Message{Role: "user", Content: "hello archive"})},
+	if err = a.ReplaceWindow([]StoredMessage{NewStoredMessage(1, spawnllm.Message{Role: "user", Content: "hello archive"})},
 		SessionState{Key: "k", NextSeq: 1}); err != nil {
 		t.Fatalf("ReplaceWindow: %v", err)
 	}
-	if err := a.Close(); err != nil {
+	if err = a.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
@@ -47,17 +47,17 @@ func TestReadOnlyConnections_WaitOutLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("raw open: %v", err)
 	}
-	defer raw.Close()
+	defer func() { noErr(t, raw.Close()) }()
 	raw.SetMaxOpenConns(1) // BEGIN and COMMIT must run on the same connection
-	if _, err := raw.Exec("PRAGMA journal_mode=DELETE"); err != nil {
+	if _, err = raw.Exec("PRAGMA journal_mode=DELETE"); err != nil {
 		t.Fatalf("journal_mode=DELETE: %v", err)
 	}
-	if _, err := raw.Exec("BEGIN EXCLUSIVE"); err != nil {
+	if _, err = raw.Exec("BEGIN EXCLUSIVE"); err != nil {
 		t.Fatalf("BEGIN EXCLUSIVE: %v", err)
 	}
 	const hold = 500 * time.Millisecond
 	release := time.AfterFunc(hold, func() {
-		if _, err := raw.Exec("COMMIT"); err != nil {
+		if _, err = raw.Exec("COMMIT"); err != nil {
 			t.Errorf("COMMIT: %v", err)
 		}
 	})
@@ -84,15 +84,13 @@ func TestReadOnlyConnections_WaitOutLock(t *testing.T) {
 	var mu sync.Mutex
 	failures := map[string]error{}
 	for name, read := range reads {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := read(); err != nil {
 				mu.Lock()
 				failures[name] = err
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

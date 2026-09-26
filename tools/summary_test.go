@@ -21,7 +21,7 @@ func writeArchiveSummaries(t *testing.T, sessionKey string, recs []memory.Summar
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer a.Close()
+	defer func() { noErr(t, a.Close()) }()
 	for _, r := range recs {
 		if _, err := a.AppendSummary(r); err != nil {
 			t.Fatalf("AppendSummary: %v", err)

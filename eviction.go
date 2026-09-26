@@ -11,9 +11,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/PivotLLM/spawnllm"
+
 	"github.com/PivotLLM/ctxengine/logger"
 	"github.com/PivotLLM/ctxengine/memory"
-	"github.com/PivotLLM/spawnllm"
 )
 
 // EvictionPolicy controls the per-turn, LLM-free eviction sweep that collapses
@@ -123,11 +124,11 @@ func (e EvictionEvent) String() string {
 		e.Bytes, e.AgeTurns, reason, e.Tool, capResource(e.Resource, evictionResourceCap))
 }
 
-func capResource(s string, max int) string {
-	if len(s) <= max || max < 2 {
+func capResource(s string, maxBytes int) string {
+	if len(s) <= maxBytes || maxBytes < 2 {
 		return s
 	}
-	return s[:max-1] + "…"
+	return s[:maxBytes-1] + "…"
 }
 
 // evictionMarker prefixes the placeholder left in place of evicted content so the
@@ -328,7 +329,11 @@ func normToolCall(tc spawnllm.ToolCall) (string, map[string]any) {
 
 	args := tc.Arguments
 	if args == nil && tc.Function != nil && strings.TrimSpace(tc.Function.Arguments) != "" {
-		_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+			// Unparseable arguments name no resource: the call is treated
+			// as argument-less rather than half-decoded.
+			args = nil
+		}
 	}
 	return name, args
 }
@@ -349,8 +354,7 @@ func (r EvictionRoles) readerResource(tool string, args map[string]any) (string,
 	if !ok || args == nil || role.ResourceArg == "" {
 		return "", false
 	}
-	v, _ := args[role.ResourceArg].(string)
-	v = strings.TrimSpace(v)
+	v := strings.TrimSpace(stringArg(args, role.ResourceArg))
 	if v == "" {
 		v = role.ResourceDefault
 	}
@@ -364,8 +368,7 @@ func (r EvictionRoles) writerResource(tool string, args map[string]any) (string,
 	if !ok || args == nil || role.ResourceArg == "" {
 		return "", false
 	}
-	v, _ := args[role.ResourceArg].(string)
-	v = strings.TrimSpace(v)
+	v := strings.TrimSpace(stringArg(args, role.ResourceArg))
 	return v, v != ""
 }
 
@@ -381,8 +384,7 @@ func (r EvictionRoles) readerSliceKey(tool string, args map[string]any) (string,
 	}
 	role := r.Readers[tool]
 	if role.KeyArg != "" {
-		discriminator, _ := args[role.KeyArg].(string)
-		return res + "#" + discriminator, true
+		return res + "#" + stringArg(args, role.KeyArg), true
 	}
 	if role.RangeArg == "" {
 		return res, true
@@ -392,6 +394,15 @@ func (r EvictionRoles) readerSliceKey(tool string, args map[string]any) (string,
 		start = toInt64(v)
 	}
 	return fmt.Sprintf("%s#%d", res, start), true
+}
+
+// stringArg returns args[key] when it is a string, and "" otherwise (absent,
+// null or another type), which every caller treats as "not given".
+func stringArg(args map[string]any, key string) string {
+	if s, ok := args[key].(string); ok {
+		return s
+	}
+	return ""
 }
 
 // toInt64 coerces a JSON-decoded numeric arg (float64 by default) to int64.
@@ -404,11 +415,13 @@ func toInt64(v any) int64 {
 	case int:
 		return int64(n)
 	case json.Number:
-		i, _ := n.Int64()
-		return i
+		if i, err := n.Int64(); err == nil {
+			return i
+		}
 	case string:
-		i, _ := strconv.ParseInt(strings.TrimSpace(n), 10, 64)
-		return i
+		if i, err := strconv.ParseInt(strings.TrimSpace(n), 10, 64); err == nil {
+			return i
+		}
 	}
 	return 0
 }
@@ -724,7 +737,7 @@ func (m *Manager) sweepEvictions(_ context.Context, force bool) []EvictionEvent 
 	// means nothing was evicted, so nothing is reported.
 	var err error
 	if sh, ok := m.store.(interface {
-		SetHistoryWithSeqs(string, []memory.StoredMessage) error
+		SetHistoryWithSeqs(sessionKey string, history []memory.StoredMessage) error
 	}); ok {
 		err = sh.SetHistoryWithSeqs(m.sessionKey, stored)
 	} else {

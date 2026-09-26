@@ -364,7 +364,8 @@ func TestSummary_Notes_RendersAndCounts(t *testing.T) {
 		t.Error("notes-only summary should count as material")
 	}
 
-	data, _ := json.Marshal(s)
+	data, err := json.Marshal(s)
+	noErr(t, err)
 	parsed, err := unmarshalSummary(string(data))
 	if err != nil {
 		t.Fatalf("unmarshal: %v", err)

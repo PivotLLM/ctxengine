@@ -56,7 +56,7 @@ func writeArchive(t *testing.T, dir, sessionKey string, msgs []memory.StoredMess
 	if err != nil {
 		t.Fatalf("writeArchive Open: %v", err)
 	}
-	defer a.Close()
+	defer func() { noErr(t, a.Close()) }()
 	now := time.Now()
 	for _, m := range msgs {
 		if err := a.Append(m.Seq, m.Message, now); err != nil {

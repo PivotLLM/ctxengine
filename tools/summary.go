@@ -10,6 +10,7 @@ import (
 	"github.com/PivotLLM/toolspec"
 
 	"github.com/PivotLLM/ctxengine"
+	"github.com/PivotLLM/ctxengine/internal/iox"
 	"github.com/PivotLLM/ctxengine/memory"
 )
 
@@ -41,7 +42,7 @@ func (h Host) summaryList(call *toolspec.ToolCall) (*toolspec.Result, error) {
 	if r != nil {
 		return r, nil
 	}
-	defer a.Close()
+	defer iox.CloseQuietly("tools", a)
 
 	metas, listErr := a.ListSummaries()
 	if listErr != nil {
@@ -122,7 +123,7 @@ func (h Host) summaryGet(call *toolspec.ToolCall) (*toolspec.Result, error) {
 	if r != nil {
 		return r, nil
 	}
-	defer a.Close()
+	defer iox.CloseQuietly("tools", a)
 
 	rec, found, getErr := a.GetSummary(id)
 	if getErr != nil {

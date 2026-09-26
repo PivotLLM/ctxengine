@@ -7,9 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/PivotLLM/spawnllm"
+
 	cronmsg "github.com/PivotLLM/ctxengine/internal/testcron"
 	"github.com/PivotLLM/ctxengine/memory"
-	"github.com/PivotLLM/spawnllm"
 )
 
 // testCronPrefix mirrors the cron-wrapper header for building test fixtures.

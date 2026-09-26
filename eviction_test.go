@@ -6,11 +6,13 @@ package ctxengine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 // --- test builders -------------------------------------------------------
@@ -18,7 +20,10 @@ import (
 // evToolCall builds a stored ToolCall (Function-form, as it is persisted) for a
 // reader/writer tool with the given args.
 func evToolCall(id, tool string, args map[string]any) spawnllm.ToolCall {
-	b, _ := json.Marshal(args)
+	b, err := json.Marshal(args)
+	if err != nil {
+		panic(fmt.Sprintf("evToolCall: marshal %v: %v", args, err))
+	}
 	return spawnllm.ToolCall{ID: id, Function: &spawnllm.FunctionCall{Name: tool, Arguments: string(b)}}
 }
 
@@ -68,10 +73,11 @@ func markToolError(h []memory.StoredMessage, id string) {
 	}
 }
 
-func newEvictMgr(store *seqStore, p EvictionPolicy) *Manager {
+func newEvictMgr(t *testing.T, store *seqStore, p EvictionPolicy) *Manager {
+	t.Helper()
 	// WithContextWindow(0) disables the derived budget so non-budget tests are
 	// deterministic; budget tests set BudgetBytes explicitly.
-	return New("sess", store, WithContextWindow(0), WithEvictionPolicy(p)).(*Manager)
+	return asManager(t, New("sess", store, WithContextWindow(0), WithEvictionPolicy(p)))
 }
 
 // findToolResult returns the content of the tool result for the given call id.
@@ -98,7 +104,7 @@ func TestSweep_Disabled(t *testing.T) {
 		turnSpec{text: "1"}, turnSpec{text: "2"}, turnSpec{text: "3"},
 		turnSpec{text: "4"}, turnSpec{text: "5"}, turnSpec{text: "6"},
 	))
-	events := newEvictMgr(store, p).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, p).SweepEvictions(context.Background())
 	if events != nil {
 		t.Fatalf("disabled policy must not evict; got %d events", len(events))
 	}
@@ -114,7 +120,7 @@ func TestSweep_ProtectsRecent(t *testing.T) {
 		turnSpec{tool: "file_read_bytes", id: "r", args: map[string]any{"path": "a.md"}, content: strings.Repeat("x", 500)}, // age 3
 		turnSpec{text: "n1"}, turnSpec{text: "n2"},
 	))
-	events := newEvictMgr(store, basePolicy()).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, basePolicy()).SweepEvictions(context.Background())
 	if len(events) != 0 {
 		t.Fatalf("protected read evicted: %+v", events)
 	}
@@ -132,7 +138,7 @@ func TestSweep_MidAgeReadKeptWithoutBudget(t *testing.T) {
 		turnSpec{tool: "file_read_bytes", id: "r", args: map[string]any{"path": "ch17.md"}, content: strings.Repeat("x", 9000)}, // age 6
 		turnSpec{text: "3"}, turnSpec{text: "4"}, turnSpec{text: "5"}, turnSpec{text: "6"}, turnSpec{text: "7"},
 	))
-	events := newEvictMgr(store, basePolicy()).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, basePolicy()).SweepEvictions(context.Background())
 	if len(events) != 0 {
 		t.Fatalf("mid-age read evicted without budget pressure: %+v", events)
 	}
@@ -143,12 +149,13 @@ func TestSweep_MidAgeReadKeptWithoutBudget(t *testing.T) {
 
 func TestSweep_StaleAnySize(t *testing.T) {
 	// Small read at age 12 (> evict 10) → evicted "stale" regardless of size.
-	specs := []turnSpec{{tool: "file_read_bytes", id: "r", args: map[string]any{"path": "a.md"}, content: "tiny"}}
-	for i := 0; i < 11; i++ { // 11 newer text turns ⇒ read age 12
+	specs := make([]turnSpec, 0, 1+11)
+	specs = append(specs, turnSpec{tool: "file_read_bytes", id: "r", args: map[string]any{"path": "a.md"}, content: "tiny"})
+	for range 11 { // 11 newer text turns ⇒ read age 12
 		specs = append(specs, turnSpec{text: "t"})
 	}
 	store := newSeqStore(buildHistory(specs...))
-	events := newEvictMgr(store, basePolicy()).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, basePolicy()).SweepEvictions(context.Background())
 	if len(events) != 1 || events[0].Reason != "stale" {
 		t.Fatalf("want 1 stale eviction, got %+v", events)
 	}
@@ -165,7 +172,7 @@ func TestSweep_SupersededByReread(t *testing.T) {
 		turnSpec{text: "1"}, turnSpec{text: "2"}, turnSpec{text: "3"},
 		turnSpec{tool: "file_read_bytes", id: "new", args: map[string]any{"path": "a.md"}, content: "fresh"}, // age 1
 	))
-	events := newEvictMgr(store, basePolicy()).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, basePolicy()).SweepEvictions(context.Background())
 	// The evicted message is the tool *result* (seq 2: assistant=1, result=2).
 	if len(events) != 1 || events[0].Reason != "superseded" || events[0].Seq != 2 {
 		t.Fatalf("want old read superseded, got %+v", events)
@@ -184,7 +191,7 @@ func TestSweep_SupersededByEdit(t *testing.T) {
 		turnSpec{text: "1"}, turnSpec{text: "2"}, turnSpec{text: "3"},
 		turnSpec{tool: "file_edit", id: "e", args: map[string]any{"path": "a.md"}, content: "ok"}, // age 1, writer
 	))
-	events := newEvictMgr(store, basePolicy()).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, basePolicy()).SweepEvictions(context.Background())
 	if len(events) != 1 || events[0].Reason != "superseded" {
 		t.Fatalf("want read superseded by edit, got %+v", events)
 	}
@@ -199,7 +206,7 @@ func TestSweep_SupersededKeptInsideProtect(t *testing.T) {
 		turnSpec{text: "1"},
 		turnSpec{tool: "file_edit", id: "e", args: map[string]any{"path": "a.md"}, content: "ok"}, // age 1, successful write
 	))
-	events := newEvictMgr(store, basePolicy()).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, basePolicy()).SweepEvictions(context.Background())
 	if len(events) != 0 {
 		t.Fatalf("recent superseded read should be kept, got %+v", events)
 	}
@@ -216,7 +223,7 @@ func TestSweep_SupersededEvictedPastProtect(t *testing.T) {
 		turnSpec{text: "1"}, turnSpec{text: "2"}, turnSpec{text: "3"},
 		turnSpec{tool: "file_edit", id: "e", args: map[string]any{"path": "a.md"}, content: "ok"}, // age 1
 	))
-	events := newEvictMgr(store, basePolicy()).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, basePolicy()).SweepEvictions(context.Background())
 	if len(events) != 1 || events[0].Reason != "superseded" {
 		t.Fatalf("want superseded read evicted past protect, got %+v", events)
 	}
@@ -237,7 +244,7 @@ func TestSweep_RecentDuplicatesKeptOldDropped(t *testing.T) {
 		turnSpec{tool: "file_read_bytes", id: "r3", args: map[string]any{"path": "a.md"}, content: strings.Repeat("z", 500)}, // age 2 (protected)
 		turnSpec{tool: "file_read_bytes", id: "r4", args: map[string]any{"path": "a.md"}, content: strings.Repeat("w", 500)}, // age 1 (latest)
 	))
-	events := newEvictMgr(store, basePolicy()).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, basePolicy()).SweepEvictions(context.Background())
 	if len(events) != 1 || events[0].Reason != "superseded" {
 		t.Fatalf("want only the past-protect duplicate evicted, got %d: %+v", len(events), events)
 	}
@@ -263,7 +270,7 @@ func TestSweep_ProtectGuardsBudget(t *testing.T) {
 		turnSpec{text: "1"}, turnSpec{text: "2"}, turnSpec{text: "3"},
 		turnSpec{tool: "file_read_bytes", id: "recent", args: map[string]any{"path": "a.md"}, content: strings.Repeat("x", 250)}, // age 1 protected
 	))
-	events := newEvictMgr(store, p).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, p).SweepEvictions(context.Background())
 	if len(events) != 1 || events[0].Reason != "budget" {
 		t.Fatalf("want 1 budget eviction, got %+v", events)
 	}
@@ -287,7 +294,7 @@ func TestSweep_Budget(t *testing.T) {
 		turnSpec{tool: "file_read_bytes", id: "c", args: map[string]any{"path": "c.md"}, content: strings.Repeat("x", 150)}, // age 4
 		turnSpec{text: "1"}, turnSpec{text: "2"}, turnSpec{text: "3"}, // ages 1-3 protected, no reader bytes
 	))
-	events := newEvictMgr(store, p).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, p).SweepEvictions(context.Background())
 	if len(events) != 2 {
 		t.Fatalf("want 2 budget evictions, got %+v", events)
 	}
@@ -311,7 +318,7 @@ func TestSweep_NonReaderUntouched(t *testing.T) {
 		turnSpec{tool: "msg_send", id: "m", args: map[string]any{"text": "hi"}, content: strings.Repeat("x", 5000)}, // age 6
 		turnSpec{text: "3"}, turnSpec{text: "4"}, turnSpec{text: "5"}, turnSpec{text: "6"}, turnSpec{text: "7"},
 	))
-	events := newEvictMgr(store, basePolicy()).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, basePolicy()).SweepEvictions(context.Background())
 	if len(events) != 0 {
 		t.Fatalf("non-reader evicted: %+v", events)
 	}
@@ -319,12 +326,13 @@ func TestSweep_NonReaderUntouched(t *testing.T) {
 
 func TestSweep_Idempotent(t *testing.T) {
 	// Read at age 12 (> evict 10) → stale eviction on the first sweep, no-op after.
-	specs := []turnSpec{{tool: "file_read_bytes", id: "r", args: map[string]any{"path": "a.md"}, content: strings.Repeat("x", 200)}}
-	for i := 0; i < 11; i++ {
+	specs := make([]turnSpec, 0, 1+11)
+	specs = append(specs, turnSpec{tool: "file_read_bytes", id: "r", args: map[string]any{"path": "a.md"}, content: strings.Repeat("x", 200)})
+	for range 11 {
 		specs = append(specs, turnSpec{text: "t"})
 	}
 	store := newSeqStore(buildHistory(specs...))
-	mgr := newEvictMgr(store, basePolicy())
+	mgr := newEvictMgr(t, store, basePolicy())
 	if got := mgr.SweepEvictions(context.Background()); len(got) != 1 {
 		t.Fatalf("first sweep want 1, got %d", len(got))
 	}
@@ -342,7 +350,7 @@ func TestSweep_EvictedStaysEvicted(t *testing.T) {
 		turnSpec{text: "1"}, turnSpec{text: "2"}, turnSpec{text: "3"},
 		turnSpec{tool: "file_read_bytes", id: "new", args: map[string]any{"path": "a.md"}, content: strings.Repeat("y", 500)}, // latest, kept
 	))
-	mgr := newEvictMgr(store, basePolicy())
+	mgr := newEvictMgr(t, store, basePolicy())
 
 	first := mgr.SweepEvictions(context.Background())
 	if len(first) != 1 || first[0].Reason != "superseded" {
@@ -354,13 +362,13 @@ func TestSweep_EvictedStaysEvicted(t *testing.T) {
 	// Age both reads past evict_turns by appending more turns.
 	aged := store.GetHistoryWithSeqs("sess")
 	base := aged[len(aged)-1].Seq
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		aged = append(aged, memory.StoredMessage{
 			Seq:     base + int64(i+1),
 			Message: spawnllm.Message{Role: "assistant", Content: "more"},
 		})
 	}
-	store.SetHistoryWithSeqs("sess", aged)
+	noErr(t, store.SetHistoryWithSeqs("sess", aged))
 
 	// The already-evicted "old" read must never reappear; only "new" (now stale)
 	// may be newly evicted.
@@ -385,7 +393,7 @@ func TestSweep_FailedWriteDoesNotSupersede(t *testing.T) {
 	)
 	markToolError(h, "e")
 	store := newSeqStore(h)
-	events := newEvictMgr(store, basePolicy()).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, basePolicy()).SweepEvictions(context.Background())
 	if len(events) != 0 {
 		t.Fatalf("read evicted by a FAILED edit (the loop bug): %+v", events)
 	}
@@ -404,7 +412,7 @@ func TestSweep_RecentSupersededEvictedUnderBudget(t *testing.T) {
 		turnSpec{text: "1"},
 		turnSpec{tool: "file_edit", id: "e", args: map[string]any{"path": "a.md"}, content: "ok"}, // age 1
 	))
-	events := newEvictMgr(store, p).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, p).SweepEvictions(context.Background())
 	if len(events) != 1 || events[0].Reason != "superseded" {
 		t.Fatalf("want recent superseded read reclaimed under budget, got %+v", events)
 	}
@@ -421,7 +429,7 @@ func TestSweep_DifferentSlicesCoexist(t *testing.T) {
 		turnSpec{text: "1"}, turnSpec{text: "2"}, turnSpec{text: "3"},
 		turnSpec{tool: "file_read_lines", id: "p2", args: map[string]any{"path": "big.md", "start_line": 716.0}, content: strings.Repeat("y", 500)}, // age 1, page 2
 	))
-	events := newEvictMgr(store, basePolicy()).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, basePolicy()).SweepEvictions(context.Background())
 	if len(events) != 0 {
 		t.Fatalf("distinct pages of one file evicted: %+v", events)
 	}
@@ -438,7 +446,7 @@ func TestSweep_SameSliceRereadSupersedes(t *testing.T) {
 		turnSpec{text: "1"}, turnSpec{text: "2"}, turnSpec{text: "3"},
 		turnSpec{tool: "file_read_lines", id: "new", args: map[string]any{"path": "big.md", "start_line": 1.0}, content: strings.Repeat("y", 500)}, // age 1, same page
 	))
-	events := newEvictMgr(store, basePolicy()).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, basePolicy()).SweepEvictions(context.Background())
 	if len(events) != 1 || events[0].Reason != "superseded" {
 		t.Fatalf("want same-page re-read to supersede the old read, got %+v", events)
 	}
@@ -456,7 +464,7 @@ func TestSweep_WriteInvalidatesAllSlices(t *testing.T) {
 		turnSpec{text: "1"}, turnSpec{text: "2"}, turnSpec{text: "3"},
 		turnSpec{tool: "file_edit_lines", id: "e", args: map[string]any{"path": "big.md", "start": 10.0}, content: "Replaced lines 10-12"}, // age 1, writer
 	))
-	events := newEvictMgr(store, basePolicy()).SweepEvictions(context.Background())
+	events := newEvictMgr(t, store, basePolicy()).SweepEvictions(context.Background())
 	if len(events) != 1 || events[0].Reason != "superseded" {
 		t.Fatalf("want page-1 read invalidated by a successful edit, got %+v", events)
 	}

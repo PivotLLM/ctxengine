@@ -10,8 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 // seqTrackingLLM captures the request sent to the model for inspection.
@@ -101,12 +102,12 @@ func TestSeqAware_CoveredRangeSetFromActualSeqs(t *testing.T) {
 	// Create 10 stored messages with seq numbers 11–20 (simulating a session
 	// that has been truncated; the first 10 were skipped).
 	const startSeq = 11
-	stored := make([]memory.StoredMessage, 10)
-	for i := range stored {
-		stored[i] = memory.StoredMessage{
+	stored := make([]memory.StoredMessage, 0, 11)
+	for i := range 10 {
+		stored = append(stored, memory.StoredMessage{
 			Seq:     int64(startSeq + i),
 			Message: spawnllm.Message{Role: "user", Content: strings.Repeat("a", 200)},
-		}
+		})
 	}
 	if len(stored)%2 != 0 {
 		stored = append(stored, memory.StoredMessage{
@@ -123,14 +124,14 @@ func TestSeqAware_CoveredRangeSetFromActualSeqs(t *testing.T) {
 	fakeSummary := buildSeqSummaryJSON("fake goal", 1, 5)
 	llm := &seqTrackingLLM{response: fakeSummary}
 
-	mgr := New("sess", store,
+	mgr := asManager(t, New("sess", store,
 		WithContextWindow(2000),
 		WithNormalPercent(50),
 		WithSafetyPercent(80),
 		WithRetainTokenPercent(20),
 		WithRetainMinMessages(2),
 		WithModelCaller(llm),
-	).(*Manager)
+	))
 	mgr.msgCount = len(stored)
 
 	err := mgr.doCompress(context.Background(), false)
@@ -178,14 +179,14 @@ func TestSeqAware_PromptContainsSeqPrefixes(t *testing.T) {
 		response: buildSeqSummaryJSON("prompt test", 42, 44),
 	}
 
-	mgr := New("sess", store,
+	mgr := asManager(t, New("sess", store,
 		WithContextWindow(1000),
 		WithNormalPercent(50),
 		WithSafetyPercent(80),
 		WithRetainTokenPercent(20),
 		WithRetainMinMessages(2),
 		WithModelCaller(llm),
-	).(*Manager)
+	))
 	mgr.msgCount = len(stored)
 
 	if err := mgr.doCompress(context.Background(), false); err != nil {
@@ -374,14 +375,14 @@ func TestSeqAware_ExistingSummaryCoverageAndRefsSurviveNextCompaction(t *testing
 		]
 	}`
 	llm := &seqTrackingLLM{response: response}
-	mgr := New("sess", store,
+	mgr := asManager(t, New("sess", store,
 		WithContextWindow(1000),
 		WithNormalPercent(50),
 		WithSafetyPercent(80),
 		WithRetainTokenPercent(20),
 		WithRetainMinMessages(2),
 		WithModelCaller(llm),
-	).(*Manager)
+	))
 	mgr.msgCount = len(stored)
 
 	if err := mgr.doCompress(context.Background(), false); err != nil {
@@ -404,11 +405,4 @@ func TestSeqAware_ExistingSummaryCoverageAndRefsSurviveNextCompaction(t *testing
 	if !foundOld {
 		t.Fatalf("old key moment ref #5 was not preserved: %+v", got.KeyMoments)
 	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

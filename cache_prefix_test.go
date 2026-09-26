@@ -18,7 +18,7 @@ func assertSamePrefix(t *testing.T, a, b []spawnllm.Message, n int) {
 	if len(a) < n || len(b) < n {
 		t.Fatalf("slices shorter than the %d-message prefix: %d and %d", n, len(a), len(b))
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if a[i].Role != b[i].Role || a[i].Content != b[i].Content {
 			t.Fatalf("prefix differs at message %d:\n%s %q\nvs\n%s %q", i, a[i].Role, a[i].Content, b[i].Role, b[i].Content)
 		}
@@ -39,7 +39,7 @@ func prefixRequest(injection string) AssembleRequest {
 func TestAssemble_PrefixStableAcrossTurns(t *testing.T) {
 	ctx := context.Background()
 	store := newMockStore()
-	mgr := New("s", store, WithContextWindow(1_000_000)).(*Manager)
+	mgr := asManager(t, New("s", store, WithContextWindow(1_000_000)))
 	if _, err := mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: "first question"}); err != nil {
 		t.Fatal(err)
 	}
@@ -55,10 +55,10 @@ func TestAssemble_PrefixStableAcrossTurns(t *testing.T) {
 		t.Fatalf("first build = %v", roles(first.Messages))
 	}
 
-	if _, err := mgr.AddAssistantMessage(ctx, spawnllm.Message{Role: "assistant", Content: "first answer"}); err != nil {
+	if _, err = mgr.AddAssistantMessage(ctx, spawnllm.Message{Role: "assistant", Content: "first answer"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: "second question"}); err != nil {
+	if _, err = mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: "second question"}); err != nil {
 		t.Fatal(err)
 	}
 	second, err := mgr.Assemble(ctx, prefixRequest("MEMORY-B"))
@@ -87,7 +87,7 @@ func TestAssemble_PrefixStableAcrossTurns(t *testing.T) {
 func TestAssemble_PrefixStableWithinTurn(t *testing.T) {
 	ctx := context.Background()
 	store := newMockStore()
-	mgr := New("s", store, WithContextWindow(1_000_000)).(*Manager)
+	mgr := asManager(t, New("s", store, WithContextWindow(1_000_000)))
 	if _, err := mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: "look it up"}); err != nil {
 		t.Fatal(err)
 	}
@@ -96,10 +96,10 @@ func TestAssemble_PrefixStableWithinTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := mgr.AddToolCallMessage(ctx, spawnllm.Message{Role: "assistant", ToolCalls: []spawnllm.ToolCall{{ID: "c1"}}}); err != nil {
+	if _, err = mgr.AddToolCallMessage(ctx, spawnllm.Message{Role: "assistant", ToolCalls: []spawnllm.ToolCall{{ID: "c1"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgr.AddToolResult(ctx, spawnllm.Message{Role: "tool", ToolCallID: "c1", Content: "42"}); err != nil {
+	if _, err = mgr.AddToolResult(ctx, spawnllm.Message{Role: "tool", ToolCallID: "c1", Content: "42"}); err != nil {
 		t.Fatal(err)
 	}
 	second, err := mgr.Assemble(ctx, prefixRequest("MEMORY-A-REVISED"))

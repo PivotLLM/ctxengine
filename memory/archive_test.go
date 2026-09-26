@@ -21,7 +21,7 @@ func openTestArchive(t *testing.T) *ArchiveStore {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(func() { a.Close() })
+	t.Cleanup(func() { noErr(t, a.Close()) })
 	return a
 }
 
@@ -116,27 +116,27 @@ func TestArchiveStore_QueryRange_SubRange(t *testing.T) {
 func TestArchiveStore_Bounds(t *testing.T) {
 	a := openTestArchive(t)
 
-	min, max, err := a.Bounds()
+	minSeq, maxSeq, err := a.Bounds()
 	if err != nil {
 		t.Fatalf("Bounds (empty): %v", err)
 	}
-	if min != 0 || max != 0 {
-		t.Errorf("empty archive Bounds = (%d, %d), want (0, 0)", min, max)
+	if minSeq != 0 || maxSeq != 0 {
+		t.Errorf("empty archive Bounds = (%d, %d), want (0, 0)", minSeq, maxSeq)
 	}
 
 	now := time.Now()
 	for _, seq := range []int64{5, 10, 3, 8} {
-		if err := a.Append(seq, sampleMsg("user", "x"), now); err != nil {
+		if err = a.Append(seq, sampleMsg("user", "x"), now); err != nil {
 			t.Fatalf("Append seq=%d: %v", seq, err)
 		}
 	}
 
-	min, max, err = a.Bounds()
+	minSeq, maxSeq, err = a.Bounds()
 	if err != nil {
 		t.Fatalf("Bounds: %v", err)
 	}
-	if min != 3 || max != 10 {
-		t.Errorf("Bounds = (%d, %d), want (3, 10)", min, max)
+	if minSeq != 3 || maxSeq != 10 {
+		t.Errorf("Bounds = (%d, %d), want (3, 10)", minSeq, maxSeq)
 	}
 }
 
@@ -168,7 +168,7 @@ func TestArchiveStore_Stats(t *testing.T) {
 		{seq: 1, at: t1},
 		{seq: 3, at: t3},
 	} {
-		if err := a.Append(e.seq, sampleMsg("user", "x"), e.at); err != nil {
+		if err = a.Append(e.seq, sampleMsg("user", "x"), e.at); err != nil {
 			t.Fatalf("Append seq=%d: %v", e.seq, err)
 		}
 	}
@@ -217,10 +217,7 @@ func TestArchiveStore_RetrievalWindowClamping(t *testing.T) {
 	if floor := maxSeq - windowSize + 1; floor > effectiveMin {
 		effectiveMin = floor
 	}
-	effectiveMax := requestedMax
-	if maxSeq < effectiveMax {
-		effectiveMax = maxSeq
-	}
+	effectiveMax := min(maxSeq, requestedMax)
 
 	// effectiveMin = max(1, 300-250+1) = 51
 	// effectiveMax = min(1000, 300) = 300
@@ -253,7 +250,7 @@ func TestArchiveStore_WALMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer a.Close()
+	defer func() { noErr(t, a.Close()) }()
 
 	var mode string
 	row := a.db.QueryRow("PRAGMA journal_mode")
@@ -300,26 +297,26 @@ func TestArchiveStore_ConcurrentReadDuringWrite(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Writer goroutine.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i := 1; i <= total; i++ {
 			if err := a.Append(int64(i), sampleMsg("user", fmt.Sprintf("msg%d", i)), now); err != nil {
 				t.Errorf("Append seq=%d: %v", i, err)
 				return
 			}
 		}
-	}()
+	})
 
 	// Reader goroutines — each opens its own read-only connection.
-	for r := 0; r < 5; r++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			// We just verify no SQLITE_BUSY or other errors occur.
-			_, _ = a.QueryRange(1, 25)
-			_, _, _ = a.Bounds()
-		}()
+	for range 5 {
+		wg.Go(func() {
+			// No SQLITE_BUSY or other error may occur.
+			if _, err := a.QueryRange(1, 25); err != nil {
+				t.Errorf("QueryRange: %v", err)
+			}
+			if _, _, err := a.Bounds(); err != nil {
+				t.Errorf("Bounds: %v", err)
+			}
+		})
 	}
 
 	wg.Wait()
@@ -348,7 +345,7 @@ func TestArchiveStore_ErrArchiveUnavailable(t *testing.T) {
 	}
 
 	// Append should be a no-op.
-	if err := a.Append(1, sampleMsg("user", "x"), time.Now()); err != nil {
+	if err = a.Append(1, sampleMsg("user", "x"), time.Now()); err != nil {
 		t.Errorf("Append on unavailable: %v", err)
 	}
 
@@ -541,18 +538,15 @@ func TestArchiveStore_ConcurrentAppends(t *testing.T) {
 	const perGoroutine = 20
 	var wg sync.WaitGroup
 
-	for g := 0; g < goroutines; g++ {
-		g := g
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < perGoroutine; i++ {
+	for g := range goroutines {
+		wg.Go(func() {
+			for i := range perGoroutine {
 				seq := int64(g*perGoroutine + i + 1)
 				if err := a.Append(seq, sampleMsg("user", fmt.Sprintf("msg%d", seq)), now); err != nil {
 					t.Errorf("goroutine %d Append seq=%d: %v", g, seq, err)
 				}
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

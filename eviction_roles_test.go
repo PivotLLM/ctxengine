@@ -29,7 +29,7 @@ func TestEvictionPlaceholder_NamesSeqAndTool(t *testing.T) {
 // names the seq of the row it replaced.
 func TestSweep_PlaceholderCarriesStoredSeq(t *testing.T) {
 	store := newSeqStore(staleReads(1, 500))
-	mgr := newEvictMgr(store, basePolicy())
+	mgr := newEvictMgr(t, store, basePolicy())
 	events := mgr.SweepEvictions(context.Background())
 	if len(events) != 1 {
 		t.Fatalf("evictions = %d, want 1", len(events))
@@ -58,7 +58,7 @@ func TestEvictionRoles_HostDeclared(t *testing.T) {
 		turnSpec{text: "5"}, turnSpec{text: "6"}, turnSpec{text: "7"}, turnSpec{text: "8"},
 		turnSpec{text: "9"}, turnSpec{text: "10"},
 	))
-	mgr := New("sess", store, WithContextWindow(0), WithEvictionPolicy(p), WithEvictionRoles(roles)).(*Manager)
+	mgr := asManager(t, New("sess", store, WithContextWindow(0), WithEvictionPolicy(p), WithEvictionRoles(roles)))
 	events := mgr.SweepEvictions(context.Background())
 	if len(events) != 1 || events[0].Tool != "doc_read" || events[0].Resource != "D1" {
 		t.Fatalf("events = %+v, want one doc_read eviction of D1", events)
@@ -74,7 +74,7 @@ func TestEvictionRoles_HostDeclared(t *testing.T) {
 		turnSpec{tool: "doc_update", id: "w", args: map[string]any{"doc_id": "D1", "body": "new"}, content: "ok"},
 		turnSpec{text: "1"}, turnSpec{text: "2"}, turnSpec{text: "3"},
 	))
-	mgr = New("sess", store, WithContextWindow(0), WithEvictionPolicy(p), WithEvictionRoles(roles)).(*Manager)
+	mgr = asManager(t, New("sess", store, WithContextWindow(0), WithEvictionPolicy(p), WithEvictionRoles(roles)))
 	events = mgr.SweepEvictions(context.Background())
 	if len(events) != 1 || events[0].Reason != "superseded" {
 		t.Fatalf("events = %+v, want the read superseded by the declared writer", events)

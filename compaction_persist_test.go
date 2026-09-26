@@ -7,8 +7,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 // persistentMockStore wraps mockStore and adds CompactionStateStore support,
@@ -57,20 +58,20 @@ func TestCompactionState_PersistedAndRestoredOnRestart(t *testing.T) {
 
 	// Pre-populate history with enough messages to trigger compression.
 	history := makeConversation(10, 200)
-	store.SetHistory(sessionKey, history)
+	noErr(t, store.SetHistory(sessionKey, history))
 
 	// Build a Manager with a successful LLM client so compression succeeds.
 	llm := &mockLLM{
 		responses: []string{validSummaryJSON("persistent goal")},
 	}
-	mgr1 := New(sessionKey, store,
+	mgr1 := asManager(t, New(sessionKey, store,
 		WithContextWindow(2000),
 		WithNormalPercent(50),
 		WithSafetyPercent(80),
 		WithRetainTokenPercent(20),
 		WithRetainMinMessages(2),
 		WithModelCaller(llm),
-	).(*Manager)
+	))
 	// The store owns the meaningful count; seed it the way a real store would
 	// have after len(history) non-noise messages, and let the manager read it.
 	store.states[sessionKey] = memory.CompactionState{MeaningfulCount: len(history)}
@@ -82,19 +83,20 @@ func TestCompactionState_PersistedAndRestoredOnRestart(t *testing.T) {
 	}
 
 	// Check that state was written to the store.
-	state, _ := store.GetCompactionState(sessionKey)
+	state, err := store.GetCompactionState(sessionKey)
+	noErr(t, err)
 	if state.MeaningfulCount == 0 {
 		t.Error("expected MeaningfulCount to be persisted after compression")
 	}
 
 	// Simulate restart: create a second Manager on the same store.
-	mgr2 := New(sessionKey, store,
+	mgr2 := asManager(t, New(sessionKey, store,
 		WithContextWindow(2000),
 		WithNormalPercent(50),
 		WithSafetyPercent(80),
 		WithRetainTokenPercent(20),
 		WithRetainMinMessages(2),
-	).(*Manager)
+	))
 
 	// Verify that the in-memory state was loaded from durable storage.
 	if mgr2.msgCount != mgr1.msgCount {
@@ -123,7 +125,7 @@ func TestCompactionState_CoolingRestoredOnRestart(t *testing.T) {
 		t.Fatalf("SetCompactionState: %v", err)
 	}
 
-	mgr := New(sessionKey, store).(*Manager)
+	mgr := asManager(t, New(sessionKey, store))
 
 	if mgr.msgCount != wantState.MeaningfulCount {
 		t.Errorf("msgCount: got %d, want %d", mgr.msgCount, wantState.MeaningfulCount)
@@ -146,7 +148,7 @@ func TestCompactionState_InMemoryStoreWorksWithZeroState(t *testing.T) {
 		{Role: "user", Content: "hello"},
 	}
 
-	mgr := New("zero-session", store).(*Manager)
+	mgr := asManager(t, New("zero-session", store))
 
 	if mgr.msgCount != 0 {
 		t.Errorf("expected msgCount=0 for in-memory store; got %d", mgr.msgCount)
@@ -162,7 +164,7 @@ func TestStats_ReturnsMsgCount(t *testing.T) {
 	store := newMockStore()
 	store.history["stats-session"] = makeConversation(3, 50)
 
-	mgr := New("stats-session", store).(*Manager)
+	mgr := asManager(t, New("stats-session", store))
 	mgr.msgCount = 7
 
 	stats := mgr.Stats()
@@ -178,17 +180,17 @@ func TestCompactionState_WrittenAfterPersistResult(t *testing.T) {
 	store := newPersistentMockStore()
 
 	history := makeConversation(10, 200)
-	store.SetHistory(sessionKey, history)
+	noErr(t, store.SetHistory(sessionKey, history))
 
 	llm := &mockLLM{responses: []string{validSummaryJSON("write-back goal")}}
-	mgr := New(sessionKey, store,
+	mgr := asManager(t, New(sessionKey, store,
 		WithContextWindow(2000),
 		WithNormalPercent(50),
 		WithSafetyPercent(80),
 		WithRetainTokenPercent(20),
 		WithRetainMinMessages(2),
 		WithModelCaller(llm),
-	).(*Manager)
+	))
 	mgr.msgCount = len(history)
 
 	if err := mgr.doCompress(context.Background(), false); err != nil {

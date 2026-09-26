@@ -11,9 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/PivotLLM/spawnllm"
+
 	"github.com/PivotLLM/ctxengine/logger"
 	"github.com/PivotLLM/ctxengine/memory"
-	"github.com/PivotLLM/spawnllm"
 )
 
 // CompactionAttempt records the outcome of a single summarization LLM
@@ -213,9 +214,14 @@ func (r *compactionRecorder) record(model, status, detail string, dur time.Durat
 		})
 		return
 	}
-	defer f.Close()
 	if _, err := f.Write(append(data, '\n')); err != nil {
 		logger.WarnCF("llmcontext", "compaction debug capture: write failed", map[string]any{
+			"session_key": r.sessionKey,
+			"error":       err.Error(),
+		})
+	}
+	if err := f.Close(); err != nil {
+		logger.WarnCF("llmcontext", "compaction debug capture: close failed", map[string]any{
 			"session_key": r.sessionKey,
 			"error":       err.Error(),
 		})
@@ -227,8 +233,8 @@ func (r *compactionRecorder) record(model, status, detail string, dur time.Durat
 // is JSON-encoded as a string so the dump stays valid JSON even when the model
 // returned non-JSON (the common failure mode).
 func (r *compactionRecorder) dumpFailure(model, status, detail string, dur time.Duration, req []spawnllm.Message, resp string) {
-	input, _ := json.Marshal(req)
-	output, _ := json.Marshal(resp)
+	input := dumpJSON(req)
+	output := dumpJSON(resp)
 	meta := map[string]any{
 		"session":     r.sessionKey,
 		"model":       model,
@@ -236,12 +242,27 @@ func (r *compactionRecorder) dumpFailure(model, status, detail string, dur time.
 		"detail":      detail,
 		"duration_ms": dur.Milliseconds(),
 	}
-	if err := r.failureDump("compress_fail", meta, string(input), string(output)); err != nil {
+	if err := r.failureDump("compress_fail", meta, input, output); err != nil {
 		logger.WarnCF("llmcontext", "failed-compression dump: write failed", map[string]any{
 			"session_key": r.sessionKey,
 			"error":       err.Error(),
 		})
 	}
+}
+
+// dumpJSON encodes v for a failure dump. A value that cannot be encoded is
+// recorded as a JSON string naming the encoding error, so the dump is still
+// written and still valid JSON.
+func dumpJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err == nil {
+		return string(b)
+	}
+	msg, msgErr := json.Marshal("unencodable: " + err.Error())
+	if msgErr != nil {
+		return `"unencodable"`
+	}
+	return string(msg)
 }
 
 // buildReport assembles the final report from the per-pass recorder, the

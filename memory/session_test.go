@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
-	cronmsg "github.com/PivotLLM/ctxengine/internal/testcron"
 	"github.com/PivotLLM/spawnllm"
+
+	cronmsg "github.com/PivotLLM/ctxengine/internal/testcron"
 )
 
 func openSessionArchive(t *testing.T, dir, key string) *ArchiveStore {
@@ -19,7 +20,7 @@ func openSessionArchive(t *testing.T, dir, key string) *ArchiveStore {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(func() { a.Close() })
+	t.Cleanup(func() { noErr(t, a.Close()) })
 	return a
 }
 
@@ -76,10 +77,11 @@ func TestSetState_RoundTrip(t *testing.T) {
 	// Upsert: a second write replaces the single row.
 	want.Summary = "changed"
 	want.PendingTurn = false
-	if err := a.SetState(want); err != nil {
+	if err = a.SetState(want); err != nil {
 		t.Fatalf("SetState again: %v", err)
 	}
-	got, _ = a.State()
+	got, err = a.State()
+	noErr(t, err)
 	if got != want {
 		t.Errorf("upsert mismatch:\n got %+v\nwant %+v", got, want)
 	}
@@ -105,19 +107,24 @@ func TestWindow_AppendReplaceTruncate(t *testing.T) {
 	if w[0].CreatedAt.IsZero() {
 		t.Error("CreatedAt not persisted")
 	}
-	if got, _ := a.State(); got.NextSeq != 5 {
+	got, err := a.State()
+	noErr(t, err)
+	if got.NextSeq != 5 {
 		t.Errorf("NextSeq = %d, want 5", got.NextSeq)
 	}
 
 	st.NextSeq = 9
-	if err := a.TruncateWindow(2, st); err != nil {
+	if err = a.TruncateWindow(2, st); err != nil {
 		t.Fatalf("TruncateWindow: %v", err)
 	}
-	w, _ = a.Window()
+	w, err = a.Window()
+	noErr(t, err)
 	if len(w) != 2 || w[0].Seq != 4 || w[1].Seq != 5 {
 		t.Fatalf("after truncate: %+v", w)
 	}
-	if got, _ := a.State(); got.NextSeq != 9 {
+	got, err = a.State()
+	noErr(t, err)
+	if got.NextSeq != 9 {
 		t.Errorf("state not written with truncate: NextSeq = %d", got.NextSeq)
 	}
 
@@ -126,18 +133,21 @@ func TestWindow_AppendReplaceTruncate(t *testing.T) {
 		NewStoredMessage(11, spawnllm.Message{Role: "assistant", Content: "y"}),
 	}
 	st.NextSeq = 11
-	if err := a.ReplaceWindow(repl, st); err != nil {
+	if err = a.ReplaceWindow(repl, st); err != nil {
 		t.Fatalf("ReplaceWindow: %v", err)
 	}
-	w, _ = a.Window()
+	w, err = a.Window()
+	noErr(t, err)
 	if len(w) != 2 || w[0].Seq != 10 || w[1].Content != "y" {
 		t.Fatalf("after replace: %+v", w)
 	}
 
-	if err := a.TruncateWindow(0, st); err != nil {
+	if err = a.TruncateWindow(0, st); err != nil {
 		t.Fatalf("TruncateWindow(0): %v", err)
 	}
-	if w, _ = a.Window(); len(w) != 0 {
+	w, err = a.Window()
+	noErr(t, err)
+	if len(w) != 0 {
 		t.Fatalf("after truncate(0): %+v", w)
 	}
 }
@@ -150,7 +160,8 @@ func TestWindow_PreservesZeroCreatedAt(t *testing.T) {
 	if err := a.ReplaceWindow([]StoredMessage{legacy}, SessionState{Key: "z", NextSeq: 1}); err != nil {
 		t.Fatalf("ReplaceWindow: %v", err)
 	}
-	w, _ := a.Window()
+	w, err := a.Window()
+	noErr(t, err)
 	if len(w) != 1 || !w[0].CreatedAt.IsZero() {
 		t.Errorf("legacy CreatedAt should stay zero: %+v", w)
 	}
@@ -228,7 +239,7 @@ func TestDeleteSession(t *testing.T) {
 	if _, err := os.Stat(path + "-wal"); err != nil {
 		t.Fatalf("expected a WAL sidecar while open: %v", err)
 	}
-	a.Close()
+	noErr(t, a.Close())
 
 	if err := DeleteSession(dir, key); err != nil {
 		t.Fatalf("DeleteSession: %v", err)

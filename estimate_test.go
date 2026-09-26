@@ -63,7 +63,7 @@ func TestManagerEstTokens_UsesConfig(t *testing.T) {
 		WithCharsPerToken(2.0),
 		WithTokenSafetyMargin(1.5),
 	)
-	m := cm.(*Manager)
+	m := asManager(t, cm)
 	msgs := []spawnllm.Message{{Role: "user", Content: "01234567890123456789"}} // 20 runes
 	// 20 / 2.0 * 1.5 = 15
 	if got := m.estTokens(msgs); got != 15 {

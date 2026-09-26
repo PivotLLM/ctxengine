@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -95,11 +96,9 @@ func TestSummaries_ListMetadataOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListSummaries: %v", err)
 	}
-	// SummaryMeta has no Summary field; assert the struct type carries no body by
-	// marshaling it and confirming the body string is absent.
-	data, _ := json.Marshal(metas)
-	if string(data) == "" {
-		t.Fatal("unexpected empty marshal")
+	// SummaryMeta carries no body: listing must not load it.
+	if _, hasBody := reflect.TypeFor[SummaryMeta]().FieldByName("Summary"); hasBody {
+		t.Fatal("SummaryMeta has a Summary field; the listing must not carry the body")
 	}
 	for _, m := range metas {
 		// SummaryMeta intentionally has no body field; this is a compile-time
@@ -136,16 +135,16 @@ func TestSummaries_ReadOnlyListAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if _, err := w.AppendSummary(SummaryRecord{GeneratedAt: time.Now(), Summary: "ro-body"}); err != nil {
+	if _, err = w.AppendSummary(SummaryRecord{GeneratedAt: time.Now(), Summary: "ro-body"}); err != nil {
 		t.Fatalf("AppendSummary: %v", err)
 	}
-	w.Close()
+	noErr(t, w.Close())
 
 	ro, err := OpenReadOnly(path)
 	if err != nil {
 		t.Fatalf("OpenReadOnly: %v", err)
 	}
-	defer ro.Close()
+	defer func() { noErr(t, ro.Close()) }()
 
 	metas, err := ro.ListSummaries()
 	if err != nil {
@@ -173,10 +172,12 @@ func writeLegacyJSONL(t *testing.T, archivePath string, cps []SummaryCheckpoint)
 	if err != nil {
 		t.Fatalf("create legacy jsonl: %v", err)
 	}
-	defer f.Close()
+	defer func() { noErr(t, f.Close()) }()
 	for _, cp := range cps {
-		line, _ := json.Marshal(cp)
-		f.Write(append(line, '\n'))
+		line, err := json.Marshal(cp)
+		noErr(t, err)
+		_, err = f.Write(append(line, '\n'))
+		noErr(t, err)
 	}
 }
 
@@ -196,7 +197,7 @@ func TestSummaries_LegacyImportOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	a.Close()
+	noErr(t, a.Close())
 	writeLegacyJSONL(t, path, cps)
 
 	// Reopen: table is empty, legacy file exists -> import runs.
@@ -218,18 +219,19 @@ func TestSummaries_LegacyImportOnce(t *testing.T) {
 	if metas[0].Profile != "" || metas[1].Profile != "" {
 		t.Errorf("expected empty profile after import, got %q,%q", metas[0].Profile, metas[1].Profile)
 	}
-	rec, _, _ := a2.GetSummary(metas[0].ID)
+	rec, _, err := a2.GetSummary(metas[0].ID)
+	noErr(t, err)
 	if rec.Summary != `{"v":1}` {
 		t.Errorf("imported body wrong: %q", rec.Summary)
 	}
-	a2.Close()
+	noErr(t, a2.Close())
 
 	// Reopen again: table non-empty -> import is skipped (no doubling).
 	a3, err := Open(path)
 	if err != nil {
 		t.Fatalf("reopen 2: %v", err)
 	}
-	defer a3.Close()
+	defer func() { noErr(t, a3.Close()) }()
 	metas2, err := a3.ListSummaries()
 	if err != nil {
 		t.Fatalf("ListSummaries 2: %v", err)
@@ -249,10 +251,10 @@ func TestSummaries_LegacyImportSkippedWhenNonEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if _, err := a.AppendSummary(SummaryRecord{GeneratedAt: time.Now(), Summary: "native"}); err != nil {
+	if _, err = a.AppendSummary(SummaryRecord{GeneratedAt: time.Now(), Summary: "native"}); err != nil {
 		t.Fatalf("AppendSummary: %v", err)
 	}
-	a.Close()
+	noErr(t, a.Close())
 
 	// Now drop a legacy file with two checkpoints; it must be ignored on reopen.
 	writeLegacyJSONL(t, path, []SummaryCheckpoint{
@@ -264,7 +266,7 @@ func TestSummaries_LegacyImportSkippedWhenNonEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer a2.Close()
+	defer func() { noErr(t, a2.Close()) }()
 	metas, err := a2.ListSummaries()
 	if err != nil {
 		t.Fatalf("ListSummaries: %v", err)

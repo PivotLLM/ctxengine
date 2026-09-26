@@ -145,7 +145,7 @@ func TestSearchTool_SQLInjection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("archive open after injection attempt: %v", err)
 	}
-	defer a.Close()
+	defer func() { noErr(t, a.Close()) }()
 	msgs, err := a.QueryRange(1, 1)
 	if err != nil {
 		t.Fatalf("QueryRange after injection attempt: %v", err)

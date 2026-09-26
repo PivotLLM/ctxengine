@@ -11,8 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 // compressTestStore is a minimal in-memory SessionStore for compress tests.
@@ -131,7 +132,7 @@ func validSummaryJSON(goals string) string {
 // Each message content is repeated to produce the desired approximate token count.
 func makeConversation(pairs int, charsPerMessage int) []spawnllm.Message {
 	msgs := make([]spawnllm.Message, 0, pairs*2)
-	for i := 0; i < pairs; i++ {
+	for range pairs {
 		msgs = append(msgs,
 			spawnllm.Message{Role: "user", Content: strings.Repeat("u", charsPerMessage)},
 			spawnllm.Message{Role: "assistant", Content: strings.Repeat("a", charsPerMessage)},
@@ -141,8 +142,9 @@ func makeConversation(pairs int, charsPerMessage int) []spawnllm.Message {
 }
 
 // newCompressManager builds a Manager wired for compress tests (no compressHook).
-func newCompressManager(store *compressTestStore, clients []*mockLLM, opts ...Option) *Manager {
-	baseOpts := []Option{
+func newCompressManager(t *testing.T, store *compressTestStore, clients []*mockLLM, opts ...Option) *Manager {
+	t.Helper()
+	baseOpts := slices.Concat([]Option{
 		WithContextWindow(10000),
 		// Tests below reason in exact token terms against a small window; the
 		// real per-request reserve would swamp it. TestTriggers_CountReserve
@@ -153,10 +155,9 @@ func newCompressManager(store *compressTestStore, clients []*mockLLM, opts ...Op
 		WithRetainTokenPercent(20),
 		WithRetainMinMessages(2),
 		WithModelCaller(chainOf(clients)),
-	}
-	baseOpts = append(baseOpts, opts...)
+	}, opts)
 	cm := New("sess", store, baseOpts...)
-	return cm.(*Manager)
+	return asManager(t, cm)
 }
 
 // TestCompress_PrimarySuccess verifies that a single successful LLM client
@@ -170,7 +171,7 @@ func TestCompress_PrimarySuccess(t *testing.T) {
 		responses: []string{validSummaryJSON("test goal")},
 	}
 
-	mgr := newCompressManager(store, []*mockLLM{llm})
+	mgr := newCompressManager(t, store, []*mockLLM{llm})
 	mgr.msgCount = len(store.history)
 
 	err := mgr.doCompress(context.Background(), false)
@@ -210,7 +211,7 @@ func TestCompress_RefusalDetectedAndModelSkipped(t *testing.T) {
 		responses: []string{validSummaryJSON("g1"), validSummaryJSON("g2")},
 	}
 
-	mgr := newCompressManager(store, []*mockLLM{refuser, worker})
+	mgr := newCompressManager(t, store, []*mockLLM{refuser, worker})
 	mgr.msgCount = len(store.history)
 
 	if err := mgr.doCompress(context.Background(), false); err != nil {
@@ -252,8 +253,9 @@ func TestCompress_RefusalDetectedAndModelSkipped(t *testing.T) {
 // payload — at least the last turn group is retained.
 func TestCompress_NeverEmptiesLiveWindow(t *testing.T) {
 	big := strings.Repeat("x", 4000)
-	history := []spawnllm.Message{{Role: "system", Content: "sys"}}
-	for i := 0; i < 6; i++ {
+	history := make([]spawnllm.Message, 0, 1+2*6)
+	history = append(history, spawnllm.Message{Role: "system", Content: "sys"})
+	for i := range 6 {
 		id := fmt.Sprintf("tc%d", i)
 		history = append(history,
 			spawnllm.Message{Role: "assistant", Content: big, ToolCalls: []spawnllm.ToolCall{{ID: id, Name: "x"}}},
@@ -264,10 +266,10 @@ func TestCompress_NeverEmptiesLiveWindow(t *testing.T) {
 	llm := &mockLLM{responses: []string{
 		validSummaryJSON("a"), validSummaryJSON("b"), validSummaryJSON("c"),
 	}}
-	mgr := newCompressManager(store, []*mockLLM{llm})
+	mgr := newCompressManager(t, store, []*mockLLM{llm})
 	mgr.msgCount = len(history)
 
-	_ = mgr.doCompress(context.Background(), false)
+	noErr(t, mgr.doCompress(context.Background(), false))
 
 	conv := 0
 	for _, m := range store.GetHistory("sess") {
@@ -285,17 +287,23 @@ func TestCompress_NeverEmptiesLiveWindow(t *testing.T) {
 // would otherwise push it out of the retained window, leaving a payload with no
 // user-role message (strict providers reject that with a non-retriable 400).
 func TestCompress_RetainsLastUserMessage(t *testing.T) {
-	history := []spawnllm.Message{{Role: "system", Content: "sys"}}
-	history = append(history, spawnllm.Message{Role: "user", Content: strings.Repeat("u", 200)})
-	for i := 0; i < 60; i++ { // long assistant tail after the only user turn
+	history := make([]spawnllm.Message, 0, 2+60)
+	history = append(history,
+		spawnllm.Message{Role: "system", Content: "sys"},
+		spawnllm.Message{Role: "user", Content: strings.Repeat("u", 200)},
+	)
+	for range 60 { // long assistant tail after the only user turn
 		history = append(history, spawnllm.Message{Role: "assistant", Content: strings.Repeat("a", 200)})
 	}
 	store := &compressTestStore{history: history}
 	llm := &mockLLM{responses: []string{validSummaryJSON("goal")}}
-	mgr := newCompressManager(store, []*mockLLM{llm})
+	mgr := newCompressManager(t, store, []*mockLLM{llm})
 	mgr.msgCount = len(history)
 
-	_ = mgr.doCompress(context.Background(), false)
+	// With the only user turn retained there may be nothing left to compact.
+	if err := mgr.doCompress(context.Background(), false); err != nil && !errors.Is(err, ErrNothingToCompress) {
+		t.Fatalf("doCompress: %v", err)
+	}
 
 	hasUser := false
 	for _, m := range store.GetHistory("sess") {
@@ -321,13 +329,15 @@ func TestCompress_HostErrorNeatened(t *testing.T) {
 			errors.New("API request failed:   Status: 402   Body: {\"error\":{\"billing_url\":\"x\"}}"),
 		},
 	}
-	mgr := newCompressManager(store, []*mockLLM{failing},
+	mgr := newCompressManager(t, store, []*mockLLM{failing},
 		WithMinPercent(1), WithRetainTokenPercent(0), WithRetainMaxTokens(400))
 	mgr.msgCount = len(store.history)
 
 	// A hard error ends the call: the loop runs one iteration per prompt type
 	// and each makes exactly one call before giving up.
-	_ = mgr.doCompress(context.Background(), false)
+	if err := mgr.doCompress(context.Background(), false); err == nil {
+		t.Fatal("doCompress against a failing model returned nil")
+	}
 	rep := mgr.LastCompactionReport()
 	if rep == nil || len(rep.Attempts) == 0 {
 		t.Fatalf("expected attempts in the report: %+v", rep)
@@ -360,7 +370,7 @@ func (c *noModelCaller) Complete(_ context.Context, _ ModelRequest) (ModelReply,
 func TestCompress_HostNoModelReportsSkipped(t *testing.T) {
 	store := &compressTestStore{history: makeConversation(10, 200)}
 	host := &noModelCaller{err: fmt.Errorf("%w: 1 in cooldown", ErrNoModel)}
-	mgr := newCompressManager(store, nil, WithModelCaller(host))
+	mgr := newCompressManager(t, store, nil, WithModelCaller(host))
 	mgr.msgCount = len(store.history)
 
 	err := mgr.doCompress(context.Background(), false)
@@ -395,10 +405,12 @@ func TestCompress_ExcludeGrowsWithinOneCall(t *testing.T) {
 		seen = append(seen, append([]string(nil), req.Exclude...))
 		return ModelReply{Content: invalidSummaryJSON("uncited"), Model: "stubborn"}
 	}}
-	mgr := newCompressManager(store, nil, WithModelCaller(stubborn))
+	mgr := newCompressManager(t, store, nil, WithModelCaller(stubborn))
 	mgr.msgCount = len(store.history)
 
-	_ = mgr.doCompress(context.Background(), false)
+	if err := mgr.doCompress(context.Background(), false); err == nil {
+		t.Fatal("doCompress with only invalid summaries returned nil")
+	}
 
 	if len(seen) < maxCompressAttempts {
 		t.Fatalf("expected at least %d calls in the first iteration, got %d", maxCompressAttempts, len(seen))
@@ -438,7 +450,7 @@ func TestCompress_FallbackSuccess(t *testing.T) {
 		responses: []string{validSummaryJSON("fallback goal")},
 	}
 
-	mgr := newCompressManager(store, []*mockLLM{primary, fallback})
+	mgr := newCompressManager(t, store, []*mockLLM{primary, fallback})
 	mgr.msgCount = len(store.history)
 
 	err := mgr.doCompress(context.Background(), false)
@@ -474,7 +486,7 @@ func TestCompress_AllFail_Normal(t *testing.T) {
 		},
 	}
 
-	mgr := newCompressManager(store, []*mockLLM{llm})
+	mgr := newCompressManager(t, store, []*mockLLM{llm})
 	mgr.msgCount = len(store.history)
 
 	err := mgr.doCompress(context.Background(), false)
@@ -503,7 +515,7 @@ func TestCompress_AllFail_Safety_Drop(t *testing.T) {
 	}
 	llm := &mockLLM{errors: errList}
 
-	mgr := newCompressManager(store, []*mockLLM{llm},
+	mgr := newCompressManager(t, store, []*mockLLM{llm},
 		WithContextWindow(10000),
 		WithSafetyPercent(80),
 		WithRetainMinMessages(2),
@@ -536,7 +548,7 @@ func TestCompress_StaleSummary(t *testing.T) {
 	}
 	llm := &mockLLM{errors: errList}
 
-	mgr := newCompressManager(store, []*mockLLM{llm},
+	mgr := newCompressManager(t, store, []*mockLLM{llm},
 		WithContextWindow(10000),
 		WithSafetyPercent(80),
 		WithRetainMinMessages(2),
@@ -572,7 +584,7 @@ func TestCompress_NotifyCallback(t *testing.T) {
 	}
 
 	var notifications []string
-	mgr := newCompressManager(store, []*mockLLM{llm},
+	mgr := newCompressManager(t, store, []*mockLLM{llm},
 		WithNotifyCallback(func(msg string) {
 			notifications = append(notifications, msg)
 		}),
@@ -590,13 +602,7 @@ func TestCompress_NotifyCallback(t *testing.T) {
 	if notifications[0] != "compression started" {
 		t.Errorf("expected first notification 'compression started'; got %q", notifications[0])
 	}
-	found := false
-	for _, n := range notifications {
-		if n == "compression complete" {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(notifications, "compression complete")
 	if !found {
 		t.Errorf("expected 'compression complete' notification; got %v", notifications)
 	}
@@ -631,7 +637,7 @@ func TestCompress_CoolingSetOnLowGain(t *testing.T) {
 		},
 	}
 
-	mgr := newCompressManager(store, []*mockLLM{llm},
+	mgr := newCompressManager(t, store, []*mockLLM{llm},
 		WithContextWindow(2000),
 		WithNormalPercent(50),
 		WithSafetyPercent(90),

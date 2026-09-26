@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PivotLLM/spawnllm"
 	"github.com/PivotLLM/spawnllm/protocoltypes"
 
 	cronmsg "github.com/PivotLLM/ctxengine/internal/testcron"
 	"github.com/PivotLLM/ctxengine/memory"
-	"github.com/PivotLLM/spawnllm"
 )
 
 // testNow is the fixed clock every age-sensitive tail test measures against, so

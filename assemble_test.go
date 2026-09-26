@@ -15,8 +15,8 @@ import (
 // changed, so a caller holding an earlier slice keeps it.
 func TestAssemble_NoChangeLeavesFlagsClear(t *testing.T) {
 	store := newMockStore()
-	store.SetHistory("test-session", []spawnllm.Message{{Role: "user", Content: "hi"}})
-	m := New("test-session", store, WithContextWindow(100_000), WithOverheadTokens(0)).(*Manager)
+	noErr(t, store.SetHistory("test-session", []spawnllm.Message{{Role: "user", Content: "hi"}}))
+	m := asManager(t, New("test-session", store, WithContextWindow(100_000), WithOverheadTokens(0)))
 
 	asm, err := m.Assemble(context.Background(), AssembleRequest{ToolDefinitionTokens: 123, Layers: systemLayers})
 	if err != nil {
@@ -39,9 +39,9 @@ func TestAssemble_NoChangeLeavesFlagsClear(t *testing.T) {
 func TestAssemble_HistoryPastSafetyCompacts(t *testing.T) {
 	store := newMockStore()
 	// 10000-token window, safety at 80% → 8000 tokens; 40000 chars ≈ 10000 tokens.
-	store.SetHistory("test-session", []spawnllm.Message{{Role: "user", Content: strings.Repeat("a", 40_000)}})
-	m := New("test-session", store,
-		WithContextWindow(10_000), WithSafetyPercent(80), WithOverheadTokens(0)).(*Manager)
+	noErr(t, store.SetHistory("test-session", []spawnllm.Message{{Role: "user", Content: strings.Repeat("a", 40_000)}}))
+	m := asManager(t, New("test-session", store,
+		WithContextWindow(10_000), WithSafetyPercent(80), WithOverheadTokens(0)))
 	fired := 0
 	m.SetTestCompressHook(func(safetyNet bool) {
 		fired++
@@ -68,9 +68,9 @@ func TestAssemble_HistoryPastSafetyCompacts(t *testing.T) {
 func TestAssemble_BuiltRequestPastSafetyCompacts(t *testing.T) {
 	store := newMockStore()
 	// ≈2500 tokens of history in a 10000 window: well under 80% on its own.
-	store.SetHistory("test-session", []spawnllm.Message{{Role: "user", Content: strings.Repeat("a", 10_000)}})
-	m := New("test-session", store,
-		WithContextWindow(10_000), WithSafetyPercent(80), WithOverheadTokens(0)).(*Manager)
+	noErr(t, store.SetHistory("test-session", []spawnllm.Message{{Role: "user", Content: strings.Repeat("a", 10_000)}}))
+	m := asManager(t, New("test-session", store,
+		WithContextWindow(10_000), WithSafetyPercent(80), WithOverheadTokens(0)))
 	fired := 0
 	m.SetTestCompressHook(func(bool) { fired++ })
 
@@ -89,12 +89,12 @@ func TestAssemble_BuiltRequestPastSafetyCompacts(t *testing.T) {
 // and neither reaches the store.
 func TestAssemble_InjectionsPlacedAndNeverPersisted(t *testing.T) {
 	store := newMockStore()
-	store.SetHistory("test-session", []spawnllm.Message{
+	noErr(t, store.SetHistory("test-session", []spawnllm.Message{
 		{Role: "user", Content: "older"},
 		{Role: "assistant", Content: "reply"},
 		{Role: "user", Content: "current"},
-	})
-	m := New("test-session", store, WithContextWindow(100_000)).(*Manager)
+	}))
+	m := asManager(t, New("test-session", store, WithContextWindow(100_000)))
 	asm, err := m.Assemble(context.Background(), AssembleRequest{Injections: []Injection{
 		{Placement: PlaceSystemStable, Text: "STABLE"},
 		{Placement: PlaceCurrentUser, Text: "ROUTED"},
@@ -124,13 +124,17 @@ func TestAssemble_InjectionsPlacedAndNeverPersisted(t *testing.T) {
 // assigned, in order, which is what memory evidence and session tools cite.
 func TestAdd_ReturnsTranscriptSeq(t *testing.T) {
 	store := newMockStore()
-	m := New("test-session", store, WithContextWindow(100_000)).(*Manager)
+	m := asManager(t, New("test-session", store, WithContextWindow(100_000)))
 	ctx := context.Background()
-	s1, _ := m.AddUserMessage(ctx, msgWithContent("a"))
-	s2, _ := m.AddToolCallMessage(ctx, spawnllm.Message{Role: "assistant"})
-	s3, _ := m.AddToolResult(ctx, spawnllm.Message{Role: "tool"})
-	s4, _ := m.AddAssistantMessage(ctx, spawnllm.Message{Role: "assistant", Content: "b"})
-	if !(s1 < s2 && s2 < s3 && s3 < s4) {
+	s1, err := m.AddUserMessage(ctx, msgWithContent("a"))
+	noErr(t, err)
+	s2, err := m.AddToolCallMessage(ctx, spawnllm.Message{Role: "assistant"})
+	noErr(t, err)
+	s3, err := m.AddToolResult(ctx, spawnllm.Message{Role: "tool"})
+	noErr(t, err)
+	s4, err := m.AddAssistantMessage(ctx, spawnllm.Message{Role: "assistant", Content: "b"})
+	noErr(t, err)
+	if s1 >= s2 || s2 >= s3 || s3 >= s4 {
 		t.Fatalf("seqs not increasing: %d %d %d %d", s1, s2, s3, s4)
 	}
 }

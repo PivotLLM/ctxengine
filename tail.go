@@ -6,8 +6,9 @@ package ctxengine
 import (
 	"time"
 
-	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
+
+	"github.com/PivotLLM/ctxengine/memory"
 )
 
 // selectTail returns the suffix of history to retain in the context window,

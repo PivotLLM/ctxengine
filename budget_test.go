@@ -25,7 +25,7 @@ func TestValidation_RetainClampedBelowFloor(t *testing.T) {
 		{"below is left alone", 8, 20, 8},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mgr := newTestManager(newMockStore(),
+			mgr := newTestManager(t, newMockStore(),
 				WithContextWindow(100_000),
 				WithMinPercent(tc.min),
 				WithNormalPercent(50),
@@ -46,7 +46,7 @@ func TestValidation_DefaultsDoNotTripTheClamp(t *testing.T) {
 		t.Fatalf("defaultRetainTokenPercent (%d) must be below defaultMinPercent (%d)",
 			defaultRetainTokenPercent, defaultMinPercent)
 	}
-	mgr := newTestManager(newMockStore(), WithContextWindow(100_000))
+	mgr := newTestManager(t, newMockStore(), WithContextWindow(100_000))
 	if mgr.cfg.retainTokenPercent != defaultRetainTokenPercent {
 		t.Errorf("defaults were clamped: retain = %d, want %d",
 			mgr.cfg.retainTokenPercent, defaultRetainTokenPercent)
@@ -66,7 +66,7 @@ func TestValidation_TriggerDaysClampedAboveRetain(t *testing.T) {
 		{"disabled is left alone", 0, 5, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mgr := newTestManager(newMockStore(),
+			mgr := newTestManager(t, newMockStore(),
 				WithContextWindow(100_000),
 				WithTriggerDays(tc.trigger),
 				WithRetainMaxAgeDays(tc.retain),
@@ -82,7 +82,7 @@ func TestValidation_TriggerDaysClampedAboveRetain(t *testing.T) {
 // the window: 10% of a million-token model is 100k tokens of retained tail,
 // inherited wholesale from a figure tuned for 128k.
 func TestRetainBudget_AbsoluteCapWins(t *testing.T) {
-	mgr := newTestManager(newMockStore(),
+	mgr := newTestManager(t, newMockStore(),
 		WithContextWindow(1_000_000),
 		WithMinPercent(20),
 		WithRetainTokenPercent(10),
@@ -96,7 +96,7 @@ func TestRetainBudget_AbsoluteCapWins(t *testing.T) {
 // TestRetainBudget_PercentWinsWhenSmaller verifies the cap is a ceiling, not an
 // override — a small window keeps its small percentage budget.
 func TestRetainBudget_PercentWinsWhenSmaller(t *testing.T) {
-	mgr := newTestManager(newMockStore(),
+	mgr := newTestManager(t, newMockStore(),
 		WithContextWindow(100_000),
 		WithMinPercent(20),
 		WithRetainTokenPercent(10),
@@ -110,7 +110,7 @@ func TestRetainBudget_PercentWinsWhenSmaller(t *testing.T) {
 // TestRetainBudget_CapDisabled is the off path: an explicit 0 removes the
 // absolute ceiling and leaves the percentage in charge.
 func TestRetainBudget_CapDisabled(t *testing.T) {
-	mgr := newTestManager(newMockStore(),
+	mgr := newTestManager(t, newMockStore(),
 		WithContextWindow(1_000_000),
 		WithMinPercent(20),
 		WithRetainTokenPercent(10),
@@ -126,12 +126,12 @@ func TestRetainBudget_CapDisabled(t *testing.T) {
 // a million-token model retains 100k of tail purely because it can. It must stay
 // a no-op on small windows, where the percentage already binds tighter.
 func TestRetainBudget_DefaultCapBindsOnLargeWindows(t *testing.T) {
-	large := newTestManager(newMockStore(), WithContextWindow(1_000_000), WithMinPercent(20))
+	large := newTestManager(t, newMockStore(), WithContextWindow(1_000_000), WithMinPercent(20))
 	if got, want := large.retainBudgetTokens(), defaultRetainMaxTokens; got != want {
 		t.Errorf("1M window: retainBudgetTokens = %d, want %d (absolute cap binds)", got, want)
 	}
 
-	small := newTestManager(newMockStore(), WithContextWindow(128_000), WithMinPercent(20))
+	small := newTestManager(t, newMockStore(), WithContextWindow(128_000), WithMinPercent(20))
 	if got, want := small.retainBudgetTokens(), 128_000*defaultRetainTokenPercent/100; got != want {
 		t.Errorf("128k window: retainBudgetTokens = %d, want %d (percentage binds tighter)", got, want)
 	}
@@ -140,11 +140,11 @@ func TestRetainBudget_DefaultCapBindsOnLargeWindows(t *testing.T) {
 // TestCompressTargetPercent covers both the explicit setting and the derived
 // default, which stays coupled to normalPercent for configs that do not set it.
 func TestCompressTargetPercent(t *testing.T) {
-	derived := newTestManager(newMockStore(), WithContextWindow(100_000), WithNormalPercent(50))
+	derived := newTestManager(t, newMockStore(), WithContextWindow(100_000), WithNormalPercent(50))
 	if got, want := derived.compressTargetPercent(), 25.0; got != want {
 		t.Errorf("derived target = %v, want %v", got, want)
 	}
-	explicit := newTestManager(newMockStore(),
+	explicit := newTestManager(t, newMockStore(),
 		WithContextWindow(100_000), WithNormalPercent(50), WithTargetPercent(15))
 	if got, want := explicit.compressTargetPercent(), 15.0; got != want {
 		t.Errorf("explicit target = %v, want %v", got, want)
@@ -155,7 +155,7 @@ func TestCompressTargetPercent(t *testing.T) {
 // disagreeing: the turn-boundary trigger used to measure stored history alone,
 // ignoring the reserve, the tool schemas and everything Build() adds.
 func TestContextPercent_CountsNonHistory(t *testing.T) {
-	mgr := newTestManager(newMockStore(),
+	mgr := newTestManager(t, newMockStore(),
 		WithContextWindow(100_000),
 		WithOverheadTokens(4_000),
 	)
@@ -174,7 +174,7 @@ func TestContextPercent_CountsNonHistory(t *testing.T) {
 // TestSetToolDefinitionTokens_IgnoresNegative keeps a bad caller from making the
 // window look smaller than it is.
 func TestSetToolDefinitionTokens_IgnoresNegative(t *testing.T) {
-	mgr := newTestManager(newMockStore(), WithContextWindow(100_000))
+	mgr := newTestManager(t, newMockStore(), WithContextWindow(100_000))
 	mgr.SetToolDefinitionTokens(5_000)
 	mgr.SetToolDefinitionTokens(-1)
 	if got := mgr.toolDefTokens; got != 5_000 {
@@ -184,11 +184,11 @@ func TestSetToolDefinitionTokens_IgnoresNegative(t *testing.T) {
 
 // TestRetainMaxAge covers the days→duration conversion and its off switch.
 func TestRetainMaxAge(t *testing.T) {
-	on := newTestManager(newMockStore(), WithContextWindow(100_000), WithRetainMaxAgeDays(5))
+	on := newTestManager(t, newMockStore(), WithContextWindow(100_000), WithRetainMaxAgeDays(5))
 	if got, want := on.retainMaxAge(), 5*24*time.Hour; got != want {
 		t.Errorf("retainMaxAge = %v, want %v", got, want)
 	}
-	off := newTestManager(newMockStore(), WithContextWindow(100_000), WithRetainMaxAgeDays(0))
+	off := newTestManager(t, newMockStore(), WithContextWindow(100_000), WithRetainMaxAgeDays(0))
 	if got := off.retainMaxAge(); got != 0 {
 		t.Errorf("retainMaxAge = %v, want 0 (disabled)", got)
 	}
@@ -201,7 +201,7 @@ func TestRetainMaxAge(t *testing.T) {
 // so this is a warning rather than a clamp, but it must be reachable and it must
 // not fire for the sensible single-bound cases.
 func TestValidation_AllRetainBoundsDisabled(t *testing.T) {
-	unbounded := newTestManager(newMockStore(),
+	unbounded := newTestManager(t, newMockStore(),
 		WithContextWindow(100_000),
 		WithRetainTokenPercent(0),
 		WithRetainMaxTokens(0),
@@ -215,7 +215,7 @@ func TestValidation_AllRetainBoundsDisabled(t *testing.T) {
 	}
 
 	// Age-only retention is a supported configuration and must stay bounded.
-	ageOnly := newTestManager(newMockStore(),
+	ageOnly := newTestManager(t, newMockStore(),
 		WithContextWindow(100_000),
 		WithRetainTokenPercent(0),
 		WithRetainMaxTokens(0),

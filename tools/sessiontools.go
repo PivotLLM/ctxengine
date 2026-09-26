@@ -3,7 +3,7 @@
 //
 // Copyright (c) 2026 Tenebris Technologies Inc.
 
-// Package sessiontools exposes the session history and lifecycle tools as
+// Package tools exposes the session history and lifecycle tools as
 // toolspec definitions with BARE names ("messages", "search", "compact",
 // "info", "summary_list", "summary_get", "clear"). A host mounts them under its
 // own namespace (ClawEh publishes "session_messages" and so on).
@@ -153,6 +153,15 @@ func (h Host) archiveError(stage, key string, err error) *toolspec.Result {
 	}
 	h.log("warn", "session archive error", map[string]any{"session": key, "stage": stage, "error": err.Error()})
 	return errResult(fmt.Sprintf("%s: %v", stage, err))
+}
+
+// stringArg returns args[key] when it is a string, and "" otherwise (absent,
+// null or another type), which every caller treats as "not given".
+func stringArg(args map[string]any, key string) string {
+	if s, ok := args[key].(string); ok {
+		return s
+	}
+	return ""
 }
 
 func intArg(args map[string]any, key string) (int64, bool) {
