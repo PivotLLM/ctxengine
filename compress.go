@@ -44,6 +44,11 @@ func (m *Manager) doCompress(ctx context.Context, safetyNet bool) error {
 	if m.cfg.notifyCallback != nil {
 		m.cfg.notifyCallback("compression started")
 	}
+	// Compaction rewrites the window and so the cached prefix anyway, which
+	// makes it the free moment to apply every pending eviction: the batched
+	// per-dispatch sweep may have been holding them back for the cache. The
+	// events are DEBUG-logged; the compaction report covers the pass.
+	m.sweepEvictions(ctx, true)
 	defer func() {
 		m.compressedAtCount = m.msgCount
 		if m.cfg.notifyCallback != nil {

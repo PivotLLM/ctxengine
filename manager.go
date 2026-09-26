@@ -367,7 +367,7 @@ func (m *Manager) Assemble(ctx context.Context, req AssembleRequest) (Assembly, 
 	if req.Channel != "" {
 		m.lastChannel, m.lastChatID = req.Channel, req.ChatID
 	}
-	out := Assembly{Evictions: m.sweepEvictions(ctx)}
+	out := Assembly{Evictions: m.sweepEvictions(ctx, false)}
 
 	if m.emergencyCompactOnHistory(ctx) {
 		out.Compacted = true
@@ -1157,8 +1157,8 @@ func composeSystem(layers []Layer, summary string, injections []Injection) strin
 }
 
 // build assembles the full message slice: one system message (the host's
-// layers around the rendered summary, then the stable injections), the
-// sanitised history, and the per-turn injections on the latest user message.
+// layers, the stable injections, then the summary data block), the sanitised
+// history, and the per-turn injections as one trailing user message.
 // Everything system-side is a single message for provider compatibility: the
 // Anthropic adapter maps messages[0] to the top-level system parameter and
 // Codex maps only the first system message to its instructions field.
@@ -1166,18 +1166,13 @@ func (m *Manager) build(req AssembleRequest) ([]spawnllm.Message, error) {
 	history := m.store.GetHistory(m.sessionKey)
 	system := composeSystem(req.Layers, m.summaryBlock(), req.Injections)
 
-	msgs := make([]spawnllm.Message, 0, len(history)+1)
+	msgs := make([]spawnllm.Message, 0, len(history)+2)
 	if system != "" {
 		msgs = append(msgs, spawnllm.Message{Role: "system", Content: system})
 	}
 	msgs = append(msgs, sanitizeHistoryForProvider(history)...)
-
-	// Per-turn content rides on the latest user message so it never sits ahead
-	// of the history.
-	for _, inj := range req.Injections {
-		if inj.Placement == PlaceCurrentUser && inj.Text != "" {
-			attachRoutedMemory(msgs, inj.Text)
-		}
+	if routed := routedInjection(req.Injections); routed != "" {
+		msgs = append(msgs, spawnllm.Message{Role: "user", Content: routed})
 	}
 
 	logger.DebugCF("llmcontext", "request assembled", map[string]any{
@@ -1196,33 +1191,33 @@ func (m *Manager) build(req AssembleRequest) ([]spawnllm.Message, error) {
 	return msgs, nil
 }
 
-// attachRoutedMemory folds the per-turn memory block into the LAST user message
-// of the built slice, in place.
+// routedInjection joins the per-turn (PlaceCurrentUser) injections into the
+// content of the trailing user message build appends, or "" when there are
+// none.
 //
-// It is deliberately not its own message: a trailing user block would put two
-// user turns back to back (which some providers merge or reject), and a trailing
-// system message is not accepted by every adapter. Folding it into the existing
-// turn sidesteps both and keeps the block fixed for every iteration of the turn,
-// so within-turn caching still works.
+// The block is its own message at the END of the slice, never folded into a
+// stored message. Folding it into the latest user message — the earlier
+// design — rewrote that message on every dispatch: in a tool loop the second
+// iteration rendered it with a block the first did not have, and the next
+// turn rendered it bare again, so the provider's cached prefix broke at that
+// message every time. A trailing message leaves every stored message rendered
+// identically from one Assemble to the next; only the tail changes, and the
+// tail is new anyway. It is never persisted: history would otherwise gain one
+// stale memory dump per turn, silently and cumulatively.
 //
-// The mutation is safe and must stay confined to the built slice: msgs comes
-// from GetHistory, which returns a copy, and nothing writes it back. If this
-// block ever reached the store, history would accumulate one stale memory dump
-// per turn — silently and cumulatively.
-//
-// With no user message (a turn that opens on tool plumbing) the block is
-// dropped rather than forced somewhere invalid; the next user turn re-routes it.
-func attachRoutedMemory(msgs []spawnllm.Message, routed string) {
-	if routed == "" {
-		return
-	}
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role != "user" {
-			continue
+// Provider shape: after a user message this makes two user turns in a row,
+// which Anthropic combines and the OpenAI-style APIs accept; after a tool
+// result it is an ordinary user turn. A model that insists on strict
+// user/assistant alternation is handled in the host's transport (spawnllm's
+// strict-alternation normalisation merges same-role neighbours).
+func routedInjection(injections []Injection) string {
+	var parts []string
+	for _, inj := range injections {
+		if inj.Placement == PlaceCurrentUser && inj.Text != "" {
+			parts = append(parts, inj.Text)
 		}
-		msgs[i].Content += systemSeparator + routed
-		return
 	}
+	return strings.Join(parts, systemSeparator)
 }
 
 // Compact triggers a normal LLM-based compression pass, identical to what

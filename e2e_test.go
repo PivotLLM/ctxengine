@@ -422,16 +422,15 @@ func TestE2E_FullLoopCompactsOnRealStore(t *testing.T) {
 	}
 	assertWellFormed(t, last)
 
-	// The injection rode on the last user message of the built slice only.
-	lastUser := -1
-	for i := len(last) - 1; i >= 0; i-- {
-		if last[i].Role == "user" {
-			lastUser = i
-			break
-		}
+	// The injection is the trailing user message of the built slice, and only
+	// that: no stored message carries it.
+	if tail := last[len(last)-1]; tail.Role != "user" || tail.Content != e2eInjection {
+		t.Fatalf("injection is not the trailing user message: %+v", tail)
 	}
-	if lastUser < 0 || !strings.HasSuffix(last[lastUser].Content, systemSeparator+e2eInjection) {
-		t.Fatalf("injection not folded into the last user message: %q", last[lastUser].Content)
+	for _, m := range last[:len(last)-1] {
+		if strings.Contains(m.Content, e2eInjection) {
+			t.Fatalf("injection leaked into an earlier message: %+v", m)
+		}
 	}
 	db := e2eDB(t, dir)
 	for _, table := range []string{"messages", "window"} {
@@ -687,8 +686,8 @@ func TestE2E_WellFormedAfterSafetyNetCompaction(t *testing.T) {
 	if srcStart != 1 || srcEnd != 6 {
 		t.Errorf("summary source range #%d-#%d, want #1-#6", srcStart, srcEnd)
 	}
-	if got := len(asm.Messages); got != 4 {
-		t.Errorf("built %d messages, want system + #7-#9", got)
+	if got := len(asm.Messages); got != 5 {
+		t.Errorf("built %d messages, want system + #7-#9 + the trailing injection", got)
 	}
 }
 
@@ -743,9 +742,9 @@ func TestE2E_WellFormedAfterSafetyNetDrop(t *testing.T) {
 	if n := queryInt(t, e2eDB(t, dir), "SELECT count(*) FROM summaries"); n != 0 {
 		t.Errorf("summaries rows = %d, want 0 (no model succeeded)", n)
 	}
-	// The built slice carries only the clean tail.
-	if got := len(asm.Messages); got != 4 {
-		t.Errorf("built %d messages, want system + #7-#9", got)
+	// The built slice carries only the clean tail (plus the trailing injection).
+	if got := len(asm.Messages); got != 5 {
+		t.Errorf("built %d messages, want system + #7-#9 + the trailing injection", got)
 	}
 }
 
@@ -782,8 +781,8 @@ func TestE2E_WellFormedAfterForceCompress(t *testing.T) {
 		t.Errorf("Assemble after ForceCompress rewrote history again: %+v", asm)
 	}
 	assertWellFormed(t, asm.Messages)
-	if got := len(asm.Messages); got != 4 {
-		t.Errorf("built %d messages, want system + 3", got)
+	if got := len(asm.Messages); got != 5 {
+		t.Errorf("built %d messages, want system + 3 + the trailing injection", got)
 	}
 }
 
@@ -897,9 +896,11 @@ func TestE2E_EvictionObservedThroughAssemble(t *testing.T) {
 	ctx := context.Background()
 	store := e2eStore(t, dir)
 	defer store.Close()
+	// A 20k-token window: the default batch threshold (5% of the window in
+	// bytes, 4000 here) is under the 5000-byte read, so the sweep applies it.
 	mgr := New(e2eKey, store,
 		WithArchiveDir(dir),
-		WithContextWindow(100_000),
+		WithContextWindow(20_000),
 		WithMessageThreshold(0),
 		WithModelCaller(&e2eSummarizer{model: "e2e-model"}),
 	).(*Manager)

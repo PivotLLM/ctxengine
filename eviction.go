@@ -57,21 +57,37 @@ type EvictionPolicy struct {
 	// yet a file_write payload is counted in full by the token estimator and can
 	// dominate the window. 0 disables argument eviction.
 	ArgBytes int
+
+	// MinSweepPercent batches evictions for the prompt cache. Every eviction
+	// rewrites an older message in place, which invalidates the provider's
+	// cached prefix from that message on, so the per-dispatch sweep applies
+	// its evictions only when together they free at least this percentage of
+	// the context window (in bytes, via chars-per-token); otherwise they wait
+	// and accumulate. A compaction pass and an explicit SweepEvictions apply
+	// them regardless — compaction rewrites the window anyway. 0 applies every
+	// sweep at once.
+	MinSweepPercent int
 }
 
 // DefaultEvictionPolicy returns the built-in defaults: enabled, protect the last
 // 3 turns, evict reads older than 10 turns, with the budget valve shedding the
-// largest reads under memory pressure.
+// largest reads under memory pressure, and evictions batched until they free
+// 5% of the window.
 func DefaultEvictionPolicy() EvictionPolicy {
 	return EvictionPolicy{
-		Enabled:      true,
-		ProtectTurns: 3,
-		EvictTurns:   10,
-		BudgetBytes:  0,
-		NotifyUser:   false,
-		ArgBytes:     defaultEvictionArgBytes,
+		Enabled:         true,
+		ProtectTurns:    3,
+		EvictTurns:      10,
+		BudgetBytes:     0,
+		NotifyUser:      false,
+		ArgBytes:        defaultEvictionArgBytes,
+		MinSweepPercent: defaultEvictionMinSweepPercent,
 	}
 }
+
+// defaultEvictionMinSweepPercent is the share of the context window a
+// per-dispatch sweep must free before its evictions are applied.
+const defaultEvictionMinSweepPercent = 5
 
 // defaultEvictionArgBytes is the threshold above which an aged-out tool-call
 // argument is replaced by a placeholder. Set well above ordinary arguments
@@ -392,15 +408,34 @@ func (m *Manager) evictionBudgetBytes() int {
 	return int(float64(m.cfg.contextWindow) * cpt * 0.40)
 }
 
-// sweepEvictions runs the per-turn eviction pass over the live window. It is
-// LLM-free, idempotent, and rewrites the stored history in place (preserving
-// seqs) so the saving persists across turns. It returns the evictions performed
-// (newest content first is not guaranteed; order follows history position) for
-// optional in-conversation notification; every eviction is also DEBUG-logged.
+// evictionMinSweepBytes resolves the batch threshold: MinSweepPercent of the
+// context window in bytes, or 0 (apply every sweep) when either is unset.
+func (m *Manager) evictionMinSweepBytes() int {
+	p := m.cfg.eviction
+	if p.MinSweepPercent <= 0 || m.cfg.contextWindow <= 0 {
+		return 0
+	}
+	cpt := m.cfg.charsPerToken
+	if cpt <= 0 {
+		cpt = defaultCharsPerToken
+	}
+	return int(float64(m.cfg.contextWindow) * cpt * float64(p.MinSweepPercent) / 100)
+}
+
+// sweepEvictions runs the eviction pass over the live window. It is LLM-free,
+// idempotent, and rewrites the stored history in place (preserving seqs) so
+// the saving persists across turns. It returns the evictions performed (order
+// follows history position) for optional in-conversation notification; every
+// eviction is also DEBUG-logged.
+//
+// Unless force is set, the evictions are applied only when together they free
+// at least MinSweepPercent of the window; below that nothing is written and
+// nil is returned, so the cached prefix survives until a batch is worth the
+// invalidation. Compaction and an explicit SweepEvictions pass force.
 //
 // Best-effort: on an empty window or a disabled policy it returns nil and makes
 // no changes.
-func (m *Manager) sweepEvictions(_ context.Context) []EvictionEvent {
+func (m *Manager) sweepEvictions(_ context.Context, force bool) []EvictionEvent {
 	p := m.cfg.eviction
 	if !p.Enabled {
 		return nil
@@ -588,6 +623,30 @@ func (m *Manager) sweepEvictions(_ context.Context) []EvictionEvent {
 		return nil
 	}
 
+	// Batch: below the threshold the sweep leaves the window (and so the
+	// cached prefix) untouched; the candidates are still there next time.
+	// stored is a copy, so the argument rewrites above are simply discarded.
+	if !force {
+		freed := 0
+		for idx := range marks {
+			freed += len(msgs[idx].Content)
+		}
+		for _, aes := range argMarks {
+			for _, ae := range aes {
+				freed += ae.bytes
+			}
+		}
+		if minBytes := m.evictionMinSweepBytes(); minBytes > 0 && freed < minBytes {
+			logger.DebugCF("llmcontext", "eviction deferred: below the batch threshold", map[string]any{
+				"session_key": m.sessionKey,
+				"candidates":  len(marks) + len(argMarks),
+				"bytes":       freed,
+				"threshold":   minBytes,
+			})
+			return nil
+		}
+	}
+
 	// Apply in history order so events and the rewritten content are deterministic.
 	events := make([]EvictionEvent, 0, len(marks)+len(argMarks))
 	for idx := range msgs {
@@ -669,11 +728,11 @@ func (m *Manager) sweepEvictions(_ context.Context) []EvictionEvent {
 	return events
 }
 
-// SweepEvictions runs the eviction pass on its own. Assemble runs the same
-// pass; this remains for callers and tests that drive the primitives one at a
-// time.
+// SweepEvictions runs the eviction pass on its own and applies whatever it
+// finds, ignoring the batch threshold: an explicit call is a request to
+// reclaim the window now. Assemble runs the batched form of the same pass.
 func (m *Manager) SweepEvictions(ctx context.Context) []EvictionEvent {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.sweepEvictions(ctx)
+	return m.sweepEvictions(ctx, true)
 }
