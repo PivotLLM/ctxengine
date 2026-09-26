@@ -4,8 +4,10 @@
 package ctxengine
 
 import (
+	"context"
 	"testing"
 
+	"github.com/PivotLLM/ctxengine/memory"
 	"github.com/PivotLLM/spawnllm"
 )
 
@@ -207,53 +209,62 @@ func assertRoles(t *testing.T, msgs []spawnllm.Message, expected ...string) {
 	}
 }
 
-// TestSanitizeHistoryForProvider_IncompleteToolResults tests the forward validation
-// that ensures assistant messages with tool_calls have ALL matching tool results.
-// This fixes the DeepSeek error: "An assistant message with 'tool_calls' must be
-// followed by tool messages responding to each 'tool_call_id'."
+// assertInterrupted checks that m is the synthesised result for call id.
+func assertInterrupted(t *testing.T, m spawnllm.Message, id string) {
+	t.Helper()
+	if m.Role != "tool" || m.ToolCallID != id {
+		t.Fatalf("expected synthesised result for %q, got role=%q tool_call_id=%q", id, m.Role, m.ToolCallID)
+	}
+	if m.Content != interruptedToolResult {
+		t.Errorf("synthesised result content = %q, want the interrupted marker", m.Content)
+	}
+}
+
+// TestSanitizeHistoryForProvider_IncompleteToolResults covers a turn whose
+// calls are only partly answered — the shape a crash between the assistant
+// write and the tool-result writes leaves behind. The group is kept and the
+// missing result is synthesised, so a strict provider ("An assistant message
+// with 'tool_calls' must be followed by tool messages responding to each
+// 'tool_call_id'") accepts it and the model is told the call was made rather
+// than left to run it again.
 func TestSanitizeHistoryForProvider_IncompleteToolResults(t *testing.T) {
-	// Assistant expects tool results for both A and B, but only A is present
 	history := []spawnllm.Message{
 		msg("user", "do two things"),
 		sanAssistantWithTools("A", "B"),
 		sanToolResult("A"),
-		// sanToolResult("B") is missing - this would cause DeepSeek to fail
+		// sanToolResult("B") is missing.
 		msg("user", "next question"),
 		msg("assistant", "answer"),
 	}
 
 	result := sanitizeHistoryForProvider(history)
-	// The assistant message with incomplete tool results should be dropped,
-	// along with its partial tool result. The remaining messages are:
-	// user ("do two things"), user ("next question"), assistant ("answer")
-	if len(result) != 3 {
-		t.Fatalf("expected 3 messages, got %d: %+v", len(result), roles(result))
+	assertRoles(t, result, "user", "assistant", "tool", "tool", "user", "assistant")
+	if result[2].ToolCallID != "A" || result[2].Content != "result" {
+		t.Errorf("the real result for A was altered: %+v", result[2])
 	}
-	assertRoles(t, result, "user", "user", "assistant")
+	assertInterrupted(t, result[3], "B")
 }
 
-// TestSanitizeHistoryForProvider_MissingAllToolResults tests the case where
-// an assistant message has tool_calls but no tool results follow at all.
+// TestSanitizeHistoryForProvider_MissingAllToolResults covers a turn with no
+// results at all: every call gets a synthesised result, in call order,
+// directly after the turn.
 func TestSanitizeHistoryForProvider_MissingAllToolResults(t *testing.T) {
 	history := []spawnllm.Message{
 		msg("user", "do something"),
-		sanAssistantWithTools("A"),
-		// No tool results at all
+		sanAssistantWithTools("A", "B"),
 		msg("user", "hello"),
 		msg("assistant", "hi"),
 	}
 
 	result := sanitizeHistoryForProvider(history)
-	// The assistant message with no tool results should be dropped.
-	// Remaining: user ("do something"), user ("hello"), assistant ("hi")
-	if len(result) != 3 {
-		t.Fatalf("expected 3 messages, got %d: %+v", len(result), roles(result))
-	}
-	assertRoles(t, result, "user", "user", "assistant")
+	assertRoles(t, result, "user", "assistant", "tool", "tool", "user", "assistant")
+	assertInterrupted(t, result[2], "A")
+	assertInterrupted(t, result[3], "B")
 }
 
-// TestSanitizeHistoryForProvider_PartialToolResultsInMiddle tests that
-// incomplete tool results in the middle of a conversation are properly handled.
+// TestSanitizeHistoryForProvider_PartialToolResultsInMiddle checks that an
+// interrupted group in the middle of a conversation is completed in place and
+// the groups around it are untouched.
 func TestSanitizeHistoryForProvider_PartialToolResultsInMiddle(t *testing.T) {
 	history := []spawnllm.Message{
 		msg("user", "first"),
@@ -271,12 +282,101 @@ func TestSanitizeHistoryForProvider_PartialToolResultsInMiddle(t *testing.T) {
 	}
 
 	result := sanitizeHistoryForProvider(history)
-	// First round is complete (user, assistant+tools, tool, assistant),
-	// second round is incomplete and dropped (assistant+tools, partial tool),
-	// third round is complete (user, assistant+tools, tool, assistant).
-	// Remaining: user, assistant, tool, assistant, user, user, assistant, tool, assistant
-	if len(result) != 9 {
-		t.Fatalf("expected 9 messages, got %d: %+v", len(result), roles(result))
+	assertRoles(t, result,
+		"user", "assistant", "tool", "assistant",
+		"user", "assistant", "tool", "tool",
+		"user", "assistant", "tool", "assistant")
+	assertInterrupted(t, result[7], "C")
+	if result[6].ToolCallID != "B" {
+		t.Errorf("result[6] answers %q, want B", result[6].ToolCallID)
 	}
-	assertRoles(t, result, "user", "assistant", "tool", "assistant", "user", "user", "assistant", "tool", "assistant")
+}
+
+// TestSanitizeHistoryForProvider_InterruptedGroupStaysProviderValid pins the
+// ordering rule the synthesis must respect: every result of a group, real or
+// synthesised, sits contiguously after its turn and answers a call that turn
+// made. A stray result in the same group is still dropped.
+func TestSanitizeHistoryForProvider_InterruptedGroupStaysProviderValid(t *testing.T) {
+	history := []spawnllm.Message{
+		msg("user", "go"),
+		sanAssistantWithTools("A", "B", "C"),
+		sanToolResult("C"),
+		sanToolResult("stray"),
+		msg("assistant", "carrying on"),
+	}
+
+	result := sanitizeHistoryForProvider(history)
+	assertRoles(t, result, "user", "assistant", "tool", "tool", "tool", "assistant")
+
+	declared := map[string]bool{}
+	for _, tc := range result[1].ToolCalls {
+		declared[tc.ID] = true
+	}
+	seen := map[string]bool{}
+	for _, m := range result[2:5] {
+		if !declared[m.ToolCallID] {
+			t.Errorf("result for undeclared call %q survived", m.ToolCallID)
+		}
+		seen[m.ToolCallID] = true
+	}
+	for _, id := range []string{"A", "B", "C"} {
+		if !seen[id] {
+			t.Errorf("call %q has no result after sanitising", id)
+		}
+	}
+	if result[2].ToolCallID != "C" || result[2].Content != "result" {
+		t.Errorf("the real result must precede the synthesised ones: %+v", result[2])
+	}
+	assertInterrupted(t, result[3], "A")
+	assertInterrupted(t, result[4], "B")
+}
+
+// TestSanitizeHistoryForProvider_BadPredecessorStillDropped pins that
+// synthesis applies only to a missing result: a group whose turn follows a
+// plain assistant message is malformed in another way and is still dropped
+// whole, unanswered calls included.
+func TestSanitizeHistoryForProvider_BadPredecessorStillDropped(t *testing.T) {
+	history := []spawnllm.Message{
+		msg("user", "hi"),
+		msg("assistant", "thinking"),
+		sanAssistantWithTools("A", "B"),
+		sanToolResult("A"),
+	}
+
+	result := sanitizeHistoryForProvider(history)
+	assertRoles(t, result, "user", "assistant")
+}
+
+// TestBuild_InterruptedGroupLeavesStoreUntouched drives the synthesis through
+// Build: the built slice carries the synthesised result, while the stored
+// history — count, messages and seqs — is exactly what it was. The synthesised
+// result exists only in the request.
+func TestBuild_InterruptedGroupLeavesStoreUntouched(t *testing.T) {
+	stored := []memory.StoredMessage{
+		{Seq: 40, Message: msg("user", "go")},
+		{Seq: 41, Message: sanAssistantWithTools("A", "B")},
+		{Seq: 42, Message: sanToolResult("A")},
+	}
+	store := newSeqStore(stored)
+	mgr := New("sess", store, WithContextWindow(100_000)).(*Manager)
+
+	built, err := mgr.Build(context.Background())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	assertRoles(t, built, "user", "assistant", "tool", "tool")
+	assertInterrupted(t, built[3], "B")
+
+	after := store.GetHistoryWithSeqs("sess")
+	if len(after) != len(stored) {
+		t.Fatalf("stored history changed: %d messages, want %d", len(after), len(stored))
+	}
+	for i := range stored {
+		if after[i].Seq != stored[i].Seq {
+			t.Errorf("seq[%d] = %d, want %d", i, after[i].Seq, stored[i].Seq)
+		}
+		if after[i].Role != stored[i].Role || after[i].ToolCallID != stored[i].ToolCallID || after[i].Content != stored[i].Content {
+			t.Errorf("stored[%d] changed: %+v", i, after[i].Message)
+		}
+	}
 }
