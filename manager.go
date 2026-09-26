@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -101,6 +102,13 @@ type Manager struct {
 	// trigger paths, which would otherwise ignore it entirely. Zero until the
 	// first Build of a session.
 	builtOverheadTokens int
+
+	// usageRatio is the EWMA of actual/estimated prompt tokens the host reports
+	// through ObserveUsage, and usageObservations how many it has reported.
+	// Once calibrationMinObservations are in, tokenMargin uses the ratio
+	// (clamped) instead of the static margin, which stays the floor.
+	usageRatio        float64
+	usageObservations int
 }
 
 // New constructs a ContextManager. Options are applied over package defaults.
@@ -375,6 +383,7 @@ func (m *Manager) Assemble(ctx context.Context, req AssembleRequest) (Assembly, 
 		}
 	}
 	out.Messages = msgs
+	out.PromptTokenEstimate = m.rawPromptTokens(msgs)
 	return out, nil
 }
 
@@ -457,12 +466,12 @@ func (m *Manager) CheckAndCompress(ctx context.Context, built []spawnllm.Message
 	return fresh, nil
 }
 
-// estimateTokens estimates token count using the package defaults
-// (~4 chars/token, no safety margin). It is retained for callers and tests that
+// estimateTokens estimates token count using the default divisor (~4
+// chars/token) and no safety margin. It is retained for callers and tests that
 // have no Manager config in scope; Manager methods should use estTokens so the
-// configured divisor and safety margin apply.
+// configured divisor and the effective safety margin apply.
 func estimateTokens(msgs []spawnllm.Message) int {
-	return estimateTokensWith(msgs, defaultCharsPerToken, defaultTokenSafetyMargin)
+	return estimateTokensWith(msgs, defaultCharsPerToken, 1.0)
 }
 
 // estimateTokensWith estimates token count by dividing the total rune count by
@@ -511,9 +520,68 @@ func estimateTokensWith(msgs []spawnllm.Message, charsPerToken, safetyMargin flo
 }
 
 // estTokens estimates token count for msgs using this Manager's configured
-// chars-per-token divisor and safety margin.
+// chars-per-token divisor and the effective safety margin (tokenMargin).
 func (m *Manager) estTokens(msgs []spawnllm.Message) int {
-	return estimateTokensWith(msgs, m.cfg.charsPerToken, m.cfg.tokenSafetyMargin)
+	return estimateTokensWith(msgs, m.cfg.charsPerToken, m.tokenMargin())
+}
+
+// tokenMargin is the multiplier every estimate is inflated by: the configured
+// static margin until calibrationMinObservations usage reports are in, then
+// the observed actual/estimated ratio clamped to [static margin,
+// calibrationMaxMargin]. The static margin is a floor, never overridden
+// downwards: a provider that counts fewer tokens than chars/4 predicts is
+// still not a reason to run closer to the line.
+func (m *Manager) tokenMargin() float64 {
+	static := m.cfg.tokenSafetyMargin
+	if static <= 0 {
+		static = defaultTokenSafetyMargin
+	}
+	if m.usageObservations < calibrationMinObservations {
+		return static
+	}
+	return math.Min(math.Max(m.usageRatio, static), calibrationMaxMargin)
+}
+
+// rawPromptTokens is the uncalibrated estimate (no margin) of the prompt the
+// host will send for a built slice: the messages plus the tool schemas. It is
+// what ObserveUsage compares the provider's count against, so the calibration
+// measures the heuristic itself rather than chasing its own margin.
+func (m *Manager) rawPromptTokens(built []spawnllm.Message) int {
+	return estimateTokensWith(built, m.cfg.charsPerToken, 1.0) + m.toolDefTokens
+}
+
+// ObserveUsage feeds back a provider's reported prompt token count for a
+// request the host built with Assemble. estimatedPromptTokens is
+// Assembly.PromptTokenEstimate for that request; actualPromptTokens is what
+// the provider billed. The ratio actual/estimated is folded into an EWMA
+// (calibrationAlpha) and, once calibrationMinObservations reports are in,
+// replaces the static safety margin in every estimate the manager makes —
+// clamped to [static margin, calibrationMaxMargin], so a run of odd reports
+// can neither drop the margin below the configured floor nor inflate it
+// without bound. Non-positive arguments are ignored.
+func (m *Manager) ObserveUsage(estimatedPromptTokens, actualPromptTokens int) {
+	if estimatedPromptTokens <= 0 || actualPromptTokens <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ratio := float64(actualPromptTokens) / float64(estimatedPromptTokens)
+	if m.usageObservations == 0 {
+		m.usageRatio = ratio
+	} else {
+		m.usageRatio += calibrationAlpha * (ratio - m.usageRatio)
+	}
+	m.usageObservations++
+	logger.DebugCF("llmcontext", "token estimate calibrated from provider usage", map[string]any{
+		"session_key":  m.sessionKey,
+		"estimated":    estimatedPromptTokens,
+		"actual":       actualPromptTokens,
+		"ratio":        ratio,
+		"ewma_ratio":   m.usageRatio,
+		"observations": m.usageObservations,
+		"margin":       m.tokenMargin(),
+	})
 }
 
 // EstimateToolDefinitionTokens estimates the token cost of a tool-schema set as

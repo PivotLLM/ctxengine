@@ -94,7 +94,9 @@ func newTestManager(store session.SessionStore, opts ...Option) *Manager {
 	// and the real 4000-token reserve would dominate every one of them. Tests
 	// that care about the reserve pass WithOverheadTokens explicitly — options
 	// are applied in order, so a later one wins.
-	cm := New("test-session", store, append([]Option{WithOverheadTokens(0)}, opts...)...)
+	// The safety margin is pinned to 1.0 for the same reason: these tests
+	// reason in exact tokens. token_calibration_test.go covers the margin.
+	cm := New("test-session", store, append([]Option{WithOverheadTokens(0), WithTokenSafetyMargin(1.0)}, opts...)...)
 	return cm.(*Manager)
 }
 

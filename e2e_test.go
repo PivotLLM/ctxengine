@@ -106,6 +106,7 @@ func e2eOpts(dir string, caller ModelCaller, extra ...Option) []Option {
 		WithModelCaller(caller),
 		WithContextWindow(3000),
 		WithOverheadTokens(0),
+		WithTokenSafetyMargin(1.0), // the tests below reason in exact tokens
 		WithMinPercent(20),
 		WithNormalPercent(50),
 		WithSafetyPercent(80),
@@ -633,6 +634,7 @@ func tightOpts(dir string, caller ModelCaller) []Option {
 		WithModelCaller(caller),
 		WithContextWindow(1300),
 		WithOverheadTokens(0),
+		WithTokenSafetyMargin(1.0), // exact-token reasoning, as in e2eOpts
 		WithMinPercent(20),
 		WithNormalPercent(50),
 		WithSafetyPercent(80),

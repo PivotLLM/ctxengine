@@ -76,6 +76,11 @@ type Assembly struct {
 	Evictions []EvictionEvent
 	// Compacted reports that a safety-net compaction ran during this call.
 	Compacted bool
+	// PromptTokenEstimate is the engine's raw estimate — no safety margin — of
+	// the prompt tokens in Messages plus the tool schemas the caller declared.
+	// Hand it back with the provider's reported prompt tokens through
+	// ObserveUsage so the estimate calibrates itself to the model in use.
+	PromptTokenEstimate int
 }
 
 // Changed reports whether stored history was rewritten by this call, by
@@ -115,6 +120,10 @@ type ContextManager interface {
 	// stored history, after it on the built request), and places the
 	// injections. It is safe to call once per iteration of a tool-using turn.
 	Assemble(ctx context.Context, req AssembleRequest) (Assembly, error)
+	// ObserveUsage reports the provider's prompt token count for a request
+	// built by Assemble, against that Assembly's PromptTokenEstimate, so the
+	// engine's token estimate calibrates itself to the model in use.
+	ObserveUsage(estimatedPromptTokens, actualPromptTokens int)
 
 	// Compact triggers a normal LLM-based compression pass on demand.
 	Compact(ctx context.Context) error

@@ -47,7 +47,19 @@ const (
 	defaultMaxCompressIterations = 3
 	defaultOverheadTokens        = 4000
 	defaultCharsPerToken         = 4.0
-	defaultTokenSafetyMargin     = 1.0
+	// defaultTokenSafetyMargin inflates the chars/4 estimate. The heuristic
+	// runs low on code, JSON and non-English text, and an under-estimate lets
+	// a request past the safety line; 15% covers the typical shortfall. It is
+	// also the floor under the runtime calibration (Manager.ObserveUsage).
+	defaultTokenSafetyMargin = 1.15
+
+	// Runtime calibration of the token estimate from provider-reported prompt
+	// tokens (Manager.ObserveUsage): the EWMA weight of a new observation, the
+	// observations needed before the calibrated ratio replaces the static
+	// margin, and the ceiling on the ratio.
+	calibrationAlpha           = 0.3
+	calibrationMinObservations = 3
+	calibrationMaxMargin       = 2.0
 
 	// defaultTriggerDays fires compaction once the oldest message in the live
 	// window is older than this many days, regardless of how little of the
@@ -138,7 +150,7 @@ type managerConfig struct {
 	charsPerToken float64
 	// tokenSafetyMargin multiplies the token estimate so it errs high. A value
 	// of 1.1 inflates the estimate by 10%, triggering compression slightly
-	// earlier. Default: 1.0 (no inflation).
+	// earlier. Default: 1.15. The floor under the calibrated ratio.
 	tokenSafetyMargin float64
 	// archiveContentMaxBytes caps per-message content stored in the archive.
 	// 0 (the default) resolves to archiveContentMaxBytes at write time.
@@ -370,7 +382,9 @@ func WithCharsPerToken(v float64) Option {
 
 // WithTokenSafetyMargin sets the multiplier applied to every token estimate so
 // it errs high, triggering compression earlier. A value of 1.1 inflates the
-// estimate by 10%. Values <= 0 are ignored and the default (1.0) is retained.
+// estimate by 10%. Values <= 0 are ignored and the default (1.15) is retained.
+// It is the floor: once ObserveUsage has enough observations the calibrated
+// ratio is used instead, but never below this value.
 func WithTokenSafetyMargin(v float64) Option {
 	return func(c *managerConfig) {
 		if v > 0 {
