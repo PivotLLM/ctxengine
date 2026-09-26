@@ -116,7 +116,7 @@ func e2eStore(t *testing.T, dir string) *session.SQLiteStore {
 // normal threshold, a 5% retain budget so one pass lands well under target,
 // and the archive on the same directory as the store.
 func e2eOpts(dir string, caller ModelCaller, extra ...Option) []Option {
-	opts := []Option{
+	return slices.Concat([]Option{
 		WithArchiveDir(dir),
 		WithModelCaller(caller),
 		WithContextWindow(3000),
@@ -128,8 +128,7 @@ func e2eOpts(dir string, caller ModelCaller, extra ...Option) []Option {
 		WithRetainTokenPercent(5),
 		WithRetainMinMessages(2),
 		WithMessageThreshold(0),
-	}
-	return append(opts, extra...)
+	}, extra)
 }
 
 func e2eRequest() AssembleRequest {
@@ -1257,7 +1256,7 @@ func cronTime(i int) time.Time {
 func cronFires(t *testing.T, mgr *Manager, n int) []int64 {
 	t.Helper()
 	ctx := context.Background()
-	var seqs []int64
+	seqs := make([]int64, 0, 2*n)
 	for i := range n {
 		fire := cronmsg.Build("3f9a1c0d", cronTime(i), "self-check: anything new?")
 		seq, err := mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: fire})
@@ -1761,19 +1760,19 @@ func TestE2E_StaleSummaryIsNotCheckpointedAgain(t *testing.T) {
 	// (retainMinMessages keeps the last two).
 	sum.fail = true
 	requestsBefore := len(sum.requests)
-	if _, err := mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: strings.Repeat("q", 2400)}); err != nil {
+	if _, err = mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: strings.Repeat("q", 2400)}); err != nil {
 		t.Fatalf("AddUserMessage: %v", err)
 	}
-	if _, err := mgr.AddAssistantMessage(ctx, spawnllm.Message{Role: "assistant", Content: strings.Repeat("a", 2400)}); err != nil {
+	if _, err = mgr.AddAssistantMessage(ctx, spawnllm.Message{Role: "assistant", Content: strings.Repeat("a", 2400)}); err != nil {
 		t.Fatalf("AddAssistantMessage: %v", err)
 	}
-	if _, err := mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: pad("and now?", 40)}); err != nil {
+	if _, err = mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: pad("and now?", 40)}); err != nil {
 		t.Fatalf("AddUserMessage: %v", err)
 	}
 	// The adds themselves trigger passes (the last one runs the safety net
 	// and gets under the line by dropping); Assemble then finds nothing left
 	// to do. Either way every pass asked the models and every model failed.
-	if _, err := mgr.Assemble(ctx, e2eRequest()); err != nil {
+	if _, err = mgr.Assemble(ctx, e2eRequest()); err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
 	if len(sum.requests) == requestsBefore {

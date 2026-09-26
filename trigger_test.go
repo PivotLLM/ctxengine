@@ -89,7 +89,7 @@ func (s *mockStore) GetHistoryWithSeqs(key string) []memory.StoredMessage {
 
 // newTestManager creates a Manager with the given options and returns the
 // concrete *Manager so tests can call SetTestCompressHook.
-func newTestManager(t testing.TB, store session.SessionStore, opts ...Option) *Manager {
+func newTestManager(t *testing.T, store session.SessionStore, opts ...Option) *Manager {
 	t.Helper()
 	// Zero the fixed per-request reserve by default. These tests use tiny
 	// context windows (1000-10000 tokens) to make the trigger arithmetic legible,

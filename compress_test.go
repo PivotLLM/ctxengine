@@ -142,9 +142,9 @@ func makeConversation(pairs int, charsPerMessage int) []spawnllm.Message {
 }
 
 // newCompressManager builds a Manager wired for compress tests (no compressHook).
-func newCompressManager(t testing.TB, store *compressTestStore, clients []*mockLLM, opts ...Option) *Manager {
+func newCompressManager(t *testing.T, store *compressTestStore, clients []*mockLLM, opts ...Option) *Manager {
 	t.Helper()
-	baseOpts := []Option{
+	baseOpts := slices.Concat([]Option{
 		WithContextWindow(10000),
 		// Tests below reason in exact token terms against a small window; the
 		// real per-request reserve would swamp it. TestTriggers_CountReserve
@@ -155,8 +155,7 @@ func newCompressManager(t testing.TB, store *compressTestStore, clients []*mockL
 		WithRetainTokenPercent(20),
 		WithRetainMinMessages(2),
 		WithModelCaller(chainOf(clients)),
-	}
-	baseOpts = append(baseOpts, opts...)
+	}, opts)
 	cm := New("sess", store, baseOpts...)
 	return asManager(t, cm)
 }
@@ -254,7 +253,8 @@ func TestCompress_RefusalDetectedAndModelSkipped(t *testing.T) {
 // payload — at least the last turn group is retained.
 func TestCompress_NeverEmptiesLiveWindow(t *testing.T) {
 	big := strings.Repeat("x", 4000)
-	history := []spawnllm.Message{{Role: "system", Content: "sys"}}
+	history := make([]spawnllm.Message, 0, 1+2*6)
+	history = append(history, spawnllm.Message{Role: "system", Content: "sys"})
 	for i := range 6 {
 		id := fmt.Sprintf("tc%d", i)
 		history = append(history,
@@ -287,8 +287,11 @@ func TestCompress_NeverEmptiesLiveWindow(t *testing.T) {
 // would otherwise push it out of the retained window, leaving a payload with no
 // user-role message (strict providers reject that with a non-retriable 400).
 func TestCompress_RetainsLastUserMessage(t *testing.T) {
-	history := []spawnllm.Message{{Role: "system", Content: "sys"}}
-	history = append(history, spawnllm.Message{Role: "user", Content: strings.Repeat("u", 200)})
+	history := make([]spawnllm.Message, 0, 2+60)
+	history = append(history,
+		spawnllm.Message{Role: "system", Content: "sys"},
+		spawnllm.Message{Role: "user", Content: strings.Repeat("u", 200)},
+	)
 	for range 60 { // long assistant tail after the only user turn
 		history = append(history, spawnllm.Message{Role: "assistant", Content: strings.Repeat("a", 200)})
 	}

@@ -5,6 +5,7 @@ package ctxengine
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,9 +15,9 @@ import (
 // newToolTurnsManager builds a Manager suitable for tool-turn tests.
 // It uses the mockStore from trigger_test.go and the mockLLM + helpers from
 // compress_test.go (all in the same package).
-func newToolTurnsManager(t testing.TB, store *mockStore, clients []*mockLLM, opts ...Option) *Manager {
+func newToolTurnsManager(t *testing.T, store *mockStore, clients []*mockLLM, opts ...Option) *Manager {
 	t.Helper()
-	baseOpts := []Option{
+	baseOpts := slices.Concat([]Option{
 		WithContextWindow(10000),
 		// Tests below reason in exact token terms against a small window; the
 		// real per-request reserve would swamp it. TestTriggers_CountReserve
@@ -27,8 +28,7 @@ func newToolTurnsManager(t testing.TB, store *mockStore, clients []*mockLLM, opt
 		WithRetainTokenPercent(20),
 		WithRetainMinMessages(2),
 		WithModelCaller(chainOf(clients)),
-	}
-	baseOpts = append(baseOpts, opts...)
+	}, opts)
 	cm := New("sess", store, baseOpts...)
 	return asManager(t, cm)
 }

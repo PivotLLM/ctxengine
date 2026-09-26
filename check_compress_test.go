@@ -5,6 +5,7 @@ package ctxengine
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,17 +13,16 @@ import (
 )
 
 // newCheckCompressManager builds a Manager for CheckAndCompress tests.
-func newCheckCompressManager(t testing.TB, store *mockStore, clients []*mockLLM, opts ...Option) *Manager {
+func newCheckCompressManager(t *testing.T, store *mockStore, clients []*mockLLM, opts ...Option) *Manager {
 	t.Helper()
-	baseOpts := []Option{
+	baseOpts := slices.Concat([]Option{
 		WithContextWindow(10000),
 		WithNormalPercent(50),
 		WithSafetyPercent(80),
 		WithRetainTokenPercent(20),
 		WithRetainMinMessages(2),
 		WithModelCaller(chainOf(clients)),
-	}
-	baseOpts = append(baseOpts, opts...)
+	}, opts)
 	cm := New("sess", store, baseOpts...)
 	return asManager(t, cm)
 }

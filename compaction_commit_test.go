@@ -32,7 +32,7 @@ func TestCompaction_CommitsThroughSQLiteStore(t *testing.T) {
 
 	for range 10 {
 		for _, role := range []string{"user", "assistant"} {
-			if _, err := store.AddFullMessage("sess", spawnllm.Message{Role: role, Content: strings.Repeat(role[:1], 200)}); err != nil {
+			if _, err = store.AddFullMessage("sess", spawnllm.Message{Role: role, Content: strings.Repeat(role[:1], 200)}); err != nil {
 				t.Fatalf("seed: %v", err)
 			}
 		}
@@ -49,7 +49,7 @@ func TestCompaction_CommitsThroughSQLiteStore(t *testing.T) {
 	))
 	defer func() { noErr(t, mgr.Close(context.Background())) }()
 
-	if err := mgr.Compact(context.Background()); err != nil {
+	if err = mgr.Compact(context.Background()); err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
 

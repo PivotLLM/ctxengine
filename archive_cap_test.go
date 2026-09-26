@@ -29,7 +29,7 @@ func TestArchive_StoresLargeToolResultWhole(t *testing.T) {
 	defer func() { noErr(t, mgr.Close(ctx)) }()
 
 	content := strings.Repeat("chapter text ", 8000) // ~104 KB
-	if _, err := mgr.AddToolCallMessage(ctx, spawnllm.Message{Role: "assistant", ToolCalls: []spawnllm.ToolCall{
+	if _, err = mgr.AddToolCallMessage(ctx, spawnllm.Message{Role: "assistant", ToolCalls: []spawnllm.ToolCall{
 		{ID: "r1", Function: &spawnllm.FunctionCall{Name: "file_read_bytes", Arguments: `{"path":"book.md"}`}},
 	}}); err != nil {
 		t.Fatal(err)

@@ -37,7 +37,8 @@ func TestCommitCompaction_AllOrNothing(t *testing.T) {
 	if got.Summary != "first" || got.NextSeq != 3 {
 		t.Errorf("state after commit = %+v, want summary first, next_seq 3", got)
 	}
-	if metas, err := a.ListSummaries(); err != nil || len(metas) != 1 || metas[0].Model != "m" {
+	metas, err := a.ListSummaries()
+	if err != nil || len(metas) != 1 || metas[0].Model != "m" {
 		t.Fatalf("summaries after commit = %+v, %v; want one from model m", metas, err)
 	}
 
@@ -59,7 +60,7 @@ func TestCommitCompaction_AllOrNothing(t *testing.T) {
 	if got.Summary != "first" || got.NextSeq != 3 {
 		t.Errorf("state after failed commit = %+v, want the previous summary and next_seq", got)
 	}
-	if metas, err := a.ListSummaries(); err != nil || len(metas) != 1 {
+	if metas, err = a.ListSummaries(); err != nil || len(metas) != 1 {
 		t.Errorf("summaries after failed commit = %d, %v; want still 1", len(metas), err)
 	}
 }

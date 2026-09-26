@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,15 +31,14 @@ func newResetStore(sessionKey string) *mockStore {
 
 // newResetManager returns a *Manager suitable for reset tests.
 // opts are applied after the base options so callers can override.
-func newResetManager(t testing.TB, store *mockStore, sessionKey string, opts ...Option) *Manager {
+func newResetManager(t *testing.T, store *mockStore, sessionKey string, opts ...Option) *Manager {
 	t.Helper()
-	baseOpts := []Option{
+	baseOpts := slices.Concat([]Option{
 		WithContextWindow(10000),
 		WithNormalPercent(90), // high threshold — compression won't fire in these tests
 		WithSafetyPercent(95),
 		WithMessageThreshold(100),
-	}
-	baseOpts = append(baseOpts, opts...)
+	}, opts)
 	cm := New(sessionKey, store, baseOpts...)
 	return asManager(t, cm)
 }
@@ -232,15 +232,14 @@ func (s *clearPendingTrackingStore) ClearPendingTurn(_ string) error {
 }
 
 // newResetManagerWithStore constructs a Manager using any SessionStore.
-func newResetManagerWithStore(t testing.TB, store session.SessionStore, sessionKey string, opts ...Option) *Manager {
+func newResetManagerWithStore(t *testing.T, store session.SessionStore, sessionKey string, opts ...Option) *Manager {
 	t.Helper()
-	baseOpts := []Option{
+	baseOpts := slices.Concat([]Option{
 		WithContextWindow(10000),
 		WithNormalPercent(90),
 		WithSafetyPercent(95),
 		WithMessageThreshold(100),
-	}
-	baseOpts = append(baseOpts, opts...)
+	}, opts)
 	cm := New(sessionKey, store, baseOpts...)
 	return asManager(t, cm)
 }

@@ -77,7 +77,7 @@ func TestSetState_RoundTrip(t *testing.T) {
 	// Upsert: a second write replaces the single row.
 	want.Summary = "changed"
 	want.PendingTurn = false
-	if err := a.SetState(want); err != nil {
+	if err = a.SetState(want); err != nil {
 		t.Fatalf("SetState again: %v", err)
 	}
 	got, err = a.State()
@@ -114,7 +114,7 @@ func TestWindow_AppendReplaceTruncate(t *testing.T) {
 	}
 
 	st.NextSeq = 9
-	if err := a.TruncateWindow(2, st); err != nil {
+	if err = a.TruncateWindow(2, st); err != nil {
 		t.Fatalf("TruncateWindow: %v", err)
 	}
 	w, err = a.Window()
@@ -133,7 +133,7 @@ func TestWindow_AppendReplaceTruncate(t *testing.T) {
 		NewStoredMessage(11, spawnllm.Message{Role: "assistant", Content: "y"}),
 	}
 	st.NextSeq = 11
-	if err := a.ReplaceWindow(repl, st); err != nil {
+	if err = a.ReplaceWindow(repl, st); err != nil {
 		t.Fatalf("ReplaceWindow: %v", err)
 	}
 	w, err = a.Window()
@@ -142,7 +142,7 @@ func TestWindow_AppendReplaceTruncate(t *testing.T) {
 		t.Fatalf("after replace: %+v", w)
 	}
 
-	if err := a.TruncateWindow(0, st); err != nil {
+	if err = a.TruncateWindow(0, st); err != nil {
 		t.Fatalf("TruncateWindow(0): %v", err)
 	}
 	w, err = a.Window()

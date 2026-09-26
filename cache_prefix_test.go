@@ -55,10 +55,10 @@ func TestAssemble_PrefixStableAcrossTurns(t *testing.T) {
 		t.Fatalf("first build = %v", roles(first.Messages))
 	}
 
-	if _, err := mgr.AddAssistantMessage(ctx, spawnllm.Message{Role: "assistant", Content: "first answer"}); err != nil {
+	if _, err = mgr.AddAssistantMessage(ctx, spawnllm.Message{Role: "assistant", Content: "first answer"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: "second question"}); err != nil {
+	if _, err = mgr.AddUserMessage(ctx, spawnllm.Message{Role: "user", Content: "second question"}); err != nil {
 		t.Fatal(err)
 	}
 	second, err := mgr.Assemble(ctx, prefixRequest("MEMORY-B"))
@@ -96,10 +96,10 @@ func TestAssemble_PrefixStableWithinTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := mgr.AddToolCallMessage(ctx, spawnllm.Message{Role: "assistant", ToolCalls: []spawnllm.ToolCall{{ID: "c1"}}}); err != nil {
+	if _, err = mgr.AddToolCallMessage(ctx, spawnllm.Message{Role: "assistant", ToolCalls: []spawnllm.ToolCall{{ID: "c1"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgr.AddToolResult(ctx, spawnllm.Message{Role: "tool", ToolCallID: "c1", Content: "42"}); err != nil {
+	if _, err = mgr.AddToolResult(ctx, spawnllm.Message{Role: "tool", ToolCallID: "c1", Content: "42"}); err != nil {
 		t.Fatal(err)
 	}
 	second, err := mgr.Assemble(ctx, prefixRequest("MEMORY-A-REVISED"))

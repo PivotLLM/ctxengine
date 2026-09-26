@@ -60,12 +60,13 @@ func storedArgs(t *testing.T, store *seqStore, id string) map[string]any {
 // bigWriteHistory builds a history whose first turn is a large file_write,
 // followed by enough text turns to age it past EvictTurns.
 func bigWriteHistory(payload string, filler int) []memory.StoredMessage {
-	specs := []turnSpec{{
+	specs := make([]turnSpec, 0, 1+filler)
+	specs = append(specs, turnSpec{
 		tool:    "file_write",
 		id:      "w1",
 		args:    map[string]any{"path": "novels/ch17.md", "content": payload},
 		content: "wrote 47185 bytes",
-	}}
+	})
 	for i := range filler {
 		specs = append(specs, turnSpec{text: string(rune('a' + i))})
 	}
@@ -178,12 +179,13 @@ func TestSweepArgs_Idempotent(t *testing.T) {
 // of native writer tools: an MCP document tool's body costs exactly as much as
 // file_write's, and a name registry would silently miss it.
 func TestSweepArgs_MCPToolCovered(t *testing.T) {
-	specs := []turnSpec{{
+	specs := make([]turnSpec, 0, 1+12)
+	specs = append(specs, turnSpec{
 		tool:    "mcp__claw__simpledoc_item_add",
 		id:      "m1",
 		args:    map[string]any{"section_id": "s1", "text": strings.Repeat("d", 20_000)},
 		content: "added",
-	}}
+	})
 	for i := range 12 {
 		specs = append(specs, turnSpec{text: string(rune('a' + i))})
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -95,12 +96,9 @@ func TestSummaries_ListMetadataOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListSummaries: %v", err)
 	}
-	// SummaryMeta has no Summary field; assert the struct type carries no body by
-	// marshaling it and confirming the body string is absent.
-	data, err := json.Marshal(metas)
-	noErr(t, err)
-	if string(data) == "" {
-		t.Fatal("unexpected empty marshal")
+	// SummaryMeta carries no body: listing must not load it.
+	if _, hasBody := reflect.TypeFor[SummaryMeta]().FieldByName("Summary"); hasBody {
+		t.Fatal("SummaryMeta has a Summary field; the listing must not carry the body")
 	}
 	for _, m := range metas {
 		// SummaryMeta intentionally has no body field; this is a compile-time
@@ -137,7 +135,7 @@ func TestSummaries_ReadOnlyListAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if _, err := w.AppendSummary(SummaryRecord{GeneratedAt: time.Now(), Summary: "ro-body"}); err != nil {
+	if _, err = w.AppendSummary(SummaryRecord{GeneratedAt: time.Now(), Summary: "ro-body"}); err != nil {
 		t.Fatalf("AppendSummary: %v", err)
 	}
 	noErr(t, w.Close())
@@ -253,7 +251,7 @@ func TestSummaries_LegacyImportSkippedWhenNonEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if _, err := a.AppendSummary(SummaryRecord{GeneratedAt: time.Now(), Summary: "native"}); err != nil {
+	if _, err = a.AppendSummary(SummaryRecord{GeneratedAt: time.Now(), Summary: "native"}); err != nil {
 		t.Fatalf("AppendSummary: %v", err)
 	}
 	noErr(t, a.Close())

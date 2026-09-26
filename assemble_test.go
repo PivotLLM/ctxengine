@@ -134,7 +134,7 @@ func TestAdd_ReturnsTranscriptSeq(t *testing.T) {
 	noErr(t, err)
 	s4, err := m.AddAssistantMessage(ctx, spawnllm.Message{Role: "assistant", Content: "b"})
 	noErr(t, err)
-	if !(s1 < s2 && s2 < s3 && s3 < s4) {
+	if s1 >= s2 || s2 >= s3 || s3 >= s4 {
 		t.Fatalf("seqs not increasing: %d %d %d %d", s1, s2, s3, s4)
 	}
 }

@@ -240,7 +240,7 @@ func TestTruncateHistory(t *testing.T) {
 	st.CompressedAtMeaningfulCount = 3
 	st.Cooling = true
 	st.ActiveModelIndex = 2
-	if err := s.SetCompactionState("trunc", st); err != nil {
+	if err = s.SetCompactionState("trunc", st); err != nil {
 		t.Fatal(err)
 	}
 	noErr(t, s.TruncateHistory("trunc", 0))
@@ -468,21 +468,21 @@ func TestPendingTurn(t *testing.T) {
 
 	// Session A: set and left set.
 	noErr(t, s.AddMessage("session-a", "user", "hello"))
-	if err := s.SetPendingTurn("session-a"); err != nil {
+	if err = s.SetPendingTurn("session-a"); err != nil {
 		t.Fatalf("SetPendingTurn: %v", err)
 	}
 	// Session B: set then cleared.
 	noErr(t, s.AddMessage("session-b", "user", "hi"))
-	if err := s.SetPendingTurn("session-b"); err != nil {
+	if err = s.SetPendingTurn("session-b"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ClearPendingTurn("session-b"); err != nil {
+	if err = s.ClearPendingTurn("session-b"); err != nil {
 		t.Fatal(err)
 	}
 	// Session C: never marked.
 	noErr(t, s.AddMessage("session-c", "user", "hey"))
 	// Session D: marked pending before any message exists.
-	if err := s.SetPendingTurn("agent:bob:main"); err != nil {
+	if err = s.SetPendingTurn("agent:bob:main"); err != nil {
 		t.Fatal(err)
 	}
 

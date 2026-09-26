@@ -9,14 +9,14 @@ import (
 // countMessages returns the number of rows in the messages table.
 func countMessages(t *testing.T, a *ArchiveStore) int {
 	t.Helper()
-	min, max, err := a.Bounds()
+	minSeq, maxSeq, err := a.Bounds()
 	if err != nil {
 		t.Fatalf("Bounds: %v", err)
 	}
-	if max == 0 {
+	if maxSeq == 0 {
 		return 0
 	}
-	rows, err := a.QueryRange(min, max)
+	rows, err := a.QueryRange(minSeq, maxSeq)
 	if err != nil {
 		t.Fatalf("QueryRange: %v", err)
 	}
@@ -37,12 +37,12 @@ func TestPruneMessagesToCount(t *testing.T) {
 		t.Fatalf("PruneMessagesToCount: %v", err)
 	}
 
-	min, max, err := a.Bounds()
+	minSeq, maxSeq, err := a.Bounds()
 	if err != nil {
 		t.Fatalf("Bounds: %v", err)
 	}
-	if min != 8 || max != 10 {
-		t.Fatalf("bounds = [%d,%d], want [8,10]", min, max)
+	if minSeq != 8 || maxSeq != 10 {
+		t.Fatalf("bounds = [%d,%d], want [8,10]", minSeq, maxSeq)
 	}
 	if got := countMessages(t, a); got != 3 {
 		t.Fatalf("count = %d, want 3", got)
@@ -84,12 +84,12 @@ func TestPruneMessagesBefore(t *testing.T) {
 		t.Fatalf("PruneMessagesBefore: %v", err)
 	}
 
-	min, max, err := a.Bounds()
+	minSeq, maxSeq, err := a.Bounds()
 	if err != nil {
 		t.Fatalf("Bounds: %v", err)
 	}
-	if min != 3 || max != 5 {
-		t.Fatalf("bounds = [%d,%d], want [3,5]", min, max)
+	if minSeq != 3 || maxSeq != 5 {
+		t.Fatalf("bounds = [%d,%d], want [3,5]", minSeq, maxSeq)
 	}
 }
 

@@ -64,7 +64,7 @@ func TestCommitCompaction(t *testing.T) {
 	}
 
 	// A drop-only commit leaves the summary and the checkpoint log alone.
-	if err := s.CommitCompaction("c", CompactionCommit{History: s.GetHistoryWithSeqs("c")[1:]}); err != nil {
+	if err = s.CommitCompaction("c", CompactionCommit{History: s.GetHistoryWithSeqs("c")[1:]}); err != nil {
 		t.Fatalf("drop-only CommitCompaction: %v", err)
 	}
 	if got := s.GetSummary("c"); got != summary {

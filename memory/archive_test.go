@@ -116,27 +116,27 @@ func TestArchiveStore_QueryRange_SubRange(t *testing.T) {
 func TestArchiveStore_Bounds(t *testing.T) {
 	a := openTestArchive(t)
 
-	min, max, err := a.Bounds()
+	minSeq, maxSeq, err := a.Bounds()
 	if err != nil {
 		t.Fatalf("Bounds (empty): %v", err)
 	}
-	if min != 0 || max != 0 {
-		t.Errorf("empty archive Bounds = (%d, %d), want (0, 0)", min, max)
+	if minSeq != 0 || maxSeq != 0 {
+		t.Errorf("empty archive Bounds = (%d, %d), want (0, 0)", minSeq, maxSeq)
 	}
 
 	now := time.Now()
 	for _, seq := range []int64{5, 10, 3, 8} {
-		if err := a.Append(seq, sampleMsg("user", "x"), now); err != nil {
+		if err = a.Append(seq, sampleMsg("user", "x"), now); err != nil {
 			t.Fatalf("Append seq=%d: %v", seq, err)
 		}
 	}
 
-	min, max, err = a.Bounds()
+	minSeq, maxSeq, err = a.Bounds()
 	if err != nil {
 		t.Fatalf("Bounds: %v", err)
 	}
-	if min != 3 || max != 10 {
-		t.Errorf("Bounds = (%d, %d), want (3, 10)", min, max)
+	if minSeq != 3 || maxSeq != 10 {
+		t.Errorf("Bounds = (%d, %d), want (3, 10)", minSeq, maxSeq)
 	}
 }
 
@@ -168,7 +168,7 @@ func TestArchiveStore_Stats(t *testing.T) {
 		{seq: 1, at: t1},
 		{seq: 3, at: t3},
 	} {
-		if err := a.Append(e.seq, sampleMsg("user", "x"), e.at); err != nil {
+		if err = a.Append(e.seq, sampleMsg("user", "x"), e.at); err != nil {
 			t.Fatalf("Append seq=%d: %v", e.seq, err)
 		}
 	}
@@ -345,7 +345,7 @@ func TestArchiveStore_ErrArchiveUnavailable(t *testing.T) {
 	}
 
 	// Append should be a no-op.
-	if err := a.Append(1, sampleMsg("user", "x"), time.Now()); err != nil {
+	if err = a.Append(1, sampleMsg("user", "x"), time.Now()); err != nil {
 		t.Errorf("Append on unavailable: %v", err)
 	}
 
@@ -539,7 +539,6 @@ func TestArchiveStore_ConcurrentAppends(t *testing.T) {
 	var wg sync.WaitGroup
 
 	for g := range goroutines {
-		g := g
 		wg.Go(func() {
 			for i := range perGoroutine {
 				seq := int64(g*perGoroutine + i + 1)

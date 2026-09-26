@@ -102,12 +102,12 @@ func TestSeqAware_CoveredRangeSetFromActualSeqs(t *testing.T) {
 	// Create 10 stored messages with seq numbers 11–20 (simulating a session
 	// that has been truncated; the first 10 were skipped).
 	const startSeq = 11
-	stored := make([]memory.StoredMessage, 10)
-	for i := range stored {
-		stored[i] = memory.StoredMessage{
+	stored := make([]memory.StoredMessage, 0, 11)
+	for i := range 10 {
+		stored = append(stored, memory.StoredMessage{
 			Seq:     int64(startSeq + i),
 			Message: spawnllm.Message{Role: "user", Content: strings.Repeat("a", 200)},
-		}
+		})
 	}
 	if len(stored)%2 != 0 {
 		stored = append(stored, memory.StoredMessage{

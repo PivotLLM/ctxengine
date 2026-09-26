@@ -66,7 +66,7 @@ func TestBuild_SummaryBlockWrapped(t *testing.T) {
 	iOpen := strings.Index(sys, summaryDataOpen)
 	iHeader := strings.Index(sys, summaryDataHeader)
 	iGoal := strings.Index(sys, "finish the outline")
-	if !(iStatic >= 0 && iStatic < iToken && iToken < iOpen && iOpen < iHeader && iHeader < iGoal) {
+	if iStatic < 0 || iStatic >= iToken || iToken >= iOpen || iOpen >= iHeader || iHeader >= iGoal {
 		t.Fatalf("system message order wrong:\n%s", sys)
 	}
 	if !strings.HasSuffix(sys, summaryDataClose) {

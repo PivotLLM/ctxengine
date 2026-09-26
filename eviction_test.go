@@ -73,7 +73,7 @@ func markToolError(h []memory.StoredMessage, id string) {
 	}
 }
 
-func newEvictMgr(t testing.TB, store *seqStore, p EvictionPolicy) *Manager {
+func newEvictMgr(t *testing.T, store *seqStore, p EvictionPolicy) *Manager {
 	t.Helper()
 	// WithContextWindow(0) disables the derived budget so non-budget tests are
 	// deterministic; budget tests set BudgetBytes explicitly.
@@ -149,7 +149,8 @@ func TestSweep_MidAgeReadKeptWithoutBudget(t *testing.T) {
 
 func TestSweep_StaleAnySize(t *testing.T) {
 	// Small read at age 12 (> evict 10) → evicted "stale" regardless of size.
-	specs := []turnSpec{{tool: "file_read_bytes", id: "r", args: map[string]any{"path": "a.md"}, content: "tiny"}}
+	specs := make([]turnSpec, 0, 1+11)
+	specs = append(specs, turnSpec{tool: "file_read_bytes", id: "r", args: map[string]any{"path": "a.md"}, content: "tiny"})
 	for range 11 { // 11 newer text turns ⇒ read age 12
 		specs = append(specs, turnSpec{text: "t"})
 	}
@@ -325,7 +326,8 @@ func TestSweep_NonReaderUntouched(t *testing.T) {
 
 func TestSweep_Idempotent(t *testing.T) {
 	// Read at age 12 (> evict 10) → stale eviction on the first sweep, no-op after.
-	specs := []turnSpec{{tool: "file_read_bytes", id: "r", args: map[string]any{"path": "a.md"}, content: strings.Repeat("x", 200)}}
+	specs := make([]turnSpec, 0, 1+11)
+	specs = append(specs, turnSpec{tool: "file_read_bytes", id: "r", args: map[string]any{"path": "a.md"}, content: strings.Repeat("x", 200)})
 	for range 11 {
 		specs = append(specs, turnSpec{text: "t"})
 	}
