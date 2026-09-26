@@ -149,6 +149,9 @@ type managerConfig struct {
 	// can be delivered to the user. The manual /compact path returns the report
 	// directly instead and does not use this callback.
 	reportCallback func(channel, chatID, text string)
+	// breakerTrippedHook, when set, is invoked once each time the compaction
+	// failure circuit breaker trips for this session.
+	breakerTrippedHook func(sessionKey string, failures int)
 	// compactDebug enables verbatim request/response capture of each
 	// summarization LLM invocation to <compressionProfileDir>/compact.jsonl.
 	compactDebug bool
@@ -336,6 +339,16 @@ func WithNotifyCallback(fn func(msg string)) Option {
 // to deliver the formatted compaction report to the user's channel.
 func WithCompactionReporter(fn func(channel, chatID, text string)) Option {
 	return func(c *managerConfig) { c.reportCallback = fn }
+}
+
+// WithBreakerTrippedHook sets the callback invoked when the compaction failure
+// circuit breaker trips: defaultMaxConsecutiveCompactFailures consecutive
+// automatic compactions failed and the normal-trigger path is now suppressed
+// for the session. It fires once per trip with the session key and the
+// failure count, so the host can raise an alert. The hook runs under the
+// manager's lock and must not call back into the same manager.
+func WithBreakerTrippedHook(fn func(sessionKey string, failures int)) Option {
+	return func(c *managerConfig) { c.breakerTrippedHook = fn }
 }
 
 // WithCompactDebug enables verbatim capture of each summarization request and

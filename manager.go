@@ -44,9 +44,10 @@ type Manager struct {
 
 	// failure circuit breaker — in-memory, resets on restart. Counts consecutive
 	// failed automatic compactions; once it reaches
-	// defaultMaxConsecutiveCompactFailures the automatic path is suppressed until
-	// msgCount advances past breakerTrippedUntilCount. A manual /compact (Compact)
-	// and the 413-recovery path (ForceCompress) bypass the breaker.
+	// defaultMaxConsecutiveCompactFailures the automatic normal-trigger path is
+	// suppressed until msgCount advances past breakerTrippedUntilCount. The
+	// safety-net path, a manual /compact (Compact) and the 413-recovery path
+	// (ForceCompress) bypass the breaker; see compress for why.
 	consecutiveCompactFailures int
 	breakerTrippedUntilCount   int // 0 = not tripped
 
@@ -800,9 +801,17 @@ func (m *Manager) archiveWindow() (minSeq, maxSeq int64) {
 // before doCompress so trigger tests remain independent of LLM behavior.
 func (m *Manager) compress(ctx context.Context, safetyNet bool) error {
 	// Failure circuit breaker: after repeated automatic-compaction failures,
-	// suppress the automatic path until enough new messages accumulate. A manual
-	// /compact (Compact) and the 413-recovery path (ForceCompress) bypass this.
-	if m.autoCompactionSuppressed() {
+	// suppress the normal-trigger path until enough new messages accumulate. A
+	// manual /compact (Compact) and the 413-recovery path (ForceCompress) bypass
+	// this, and so does the safety net: it is the guarantee that the request
+	// fits before it reaches the provider, and it has its own drop-only fallback
+	// when the model fails, so suppressing it would not save a model call so
+	// much as let an oversized request through. Returning nil here for a
+	// safety-net pass was exactly that bug: the emergency paths read nil as
+	// "compacted" and skipped their fallback. The breaker exists to stop the
+	// optional normal path from hammering a failing model; the emergency path
+	// is not optional.
+	if !safetyNet && m.autoCompactionSuppressed() {
 		logger.InfoCF("llmcontext", "automatic compaction suppressed by circuit breaker", map[string]any{
 			"session_key":          m.sessionKey,
 			"consecutive_failures": m.consecutiveCompactFailures,
@@ -870,6 +879,9 @@ func (m *Manager) recordCompactionOutcome(err error) {
 				"consecutive_failures": m.consecutiveCompactFailures,
 				"resume_at_msg_count":  m.breakerTrippedUntilCount,
 			})
+			if m.cfg.breakerTrippedHook != nil {
+				m.cfg.breakerTrippedHook(m.sessionKey, m.consecutiveCompactFailures)
+			}
 		}
 	}
 }
