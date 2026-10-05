@@ -341,8 +341,8 @@ func normToolCall(tc spawnllm.ToolCall) (string, map[string]any) {
 // normToolName strips any "mcp__server__" namespace prefix so native and
 // MCP-published tool names compare equal.
 func normToolName(name string) string {
-	if i := strings.LastIndex(name, "__"); i >= 0 {
-		return name[i+2:]
+	if _, after, ok := strings.CutLast(name, "__"); ok {
+		return after
 	}
 	return name
 }

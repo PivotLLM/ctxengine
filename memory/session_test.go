@@ -156,7 +156,7 @@ func TestWindow_AppendReplaceTruncate(t *testing.T) {
 // with no timestamp must read back zero, not be stamped on every read.
 func TestWindow_PreservesZeroCreatedAt(t *testing.T) {
 	a := openSessionArchive(t, t.TempDir(), "z")
-	legacy := StoredMessage{Seq: 1, Message: spawnllm.Message{Role: "user", Content: "old"}}
+	legacy := StoredMessage{Seq: 1, Role: "user", Content: "old"}
 	if err := a.ReplaceWindow([]StoredMessage{legacy}, SessionState{Key: "z", NextSeq: 1}); err != nil {
 		t.Fatalf("ReplaceWindow: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestNoiseClassifier_CronNoise(t *testing.T) {
 	// First cron message with a given payload — not noise.
 	payload := "check disk space: 42% used"
 	content1 := testCronPrefix + "2026-01-01T00:00:00Z:\n\n" + payload
-	msg1 := StoredMessage{Seq: 1, Message: spawnllm.Message{Role: "user", Content: content1}}
+	msg1 := StoredMessage{Seq: 1, Role: "user", Content: content1}
 	if cache.IsNoise(msg1, cronmsg.CollapseKey) {
 		t.Error("first cron message should not be noise")
 	}
@@ -272,7 +272,7 @@ func TestNoiseClassifier_CronNoise(t *testing.T) {
 
 	// Same payload at a different timestamp — noise.
 	content2 := testCronPrefix + "2026-01-01T01:00:00Z:\n\n" + payload
-	msg2 := StoredMessage{Seq: 2, Message: spawnllm.Message{Role: "user", Content: content2}}
+	msg2 := StoredMessage{Seq: 2, Role: "user", Content: content2}
 	if !cache.IsNoise(msg2, cronmsg.CollapseKey) {
 		t.Error("duplicate cron payload should be noise")
 	}
@@ -280,7 +280,7 @@ func TestNoiseClassifier_CronNoise(t *testing.T) {
 
 	// Different payload — not noise.
 	content3 := testCronPrefix + "2026-01-01T02:00:00Z:\n\n" + "check disk space: 80% used"
-	msg3 := StoredMessage{Seq: 3, Message: spawnllm.Message{Role: "user", Content: content3}}
+	msg3 := StoredMessage{Seq: 3, Role: "user", Content: content3}
 	if cache.IsNoise(msg3, cronmsg.CollapseKey) {
 		t.Error("different cron payload should not be noise")
 	}
@@ -289,14 +289,14 @@ func TestNoiseClassifier_CronNoise(t *testing.T) {
 func TestNoiseClassifier_SameRole(t *testing.T) {
 	cache := NewNoiseCache()
 
-	msg1 := StoredMessage{Seq: 1, Message: spawnllm.Message{Role: "user", Content: "hello"}}
+	msg1 := StoredMessage{Seq: 1, Role: "user", Content: "hello"}
 	if cache.IsNoise(msg1, cronmsg.CollapseKey) {
 		t.Error("first message should not be noise")
 	}
 	cache.Record(msg1, cronmsg.CollapseKey)
 
 	// Same role and content — noise.
-	msg2 := StoredMessage{Seq: 2, Message: spawnllm.Message{Role: "user", Content: "hello"}}
+	msg2 := StoredMessage{Seq: 2, Role: "user", Content: "hello"}
 	if !cache.IsNoise(msg2, cronmsg.CollapseKey) {
 		t.Error("duplicate same-role content should be noise")
 	}
@@ -305,10 +305,10 @@ func TestNoiseClassifier_SameRole(t *testing.T) {
 func TestNoiseClassifier_DifferentContent(t *testing.T) {
 	cache := NewNoiseCache()
 
-	msg1 := StoredMessage{Seq: 1, Message: spawnllm.Message{Role: "user", Content: "hello"}}
+	msg1 := StoredMessage{Seq: 1, Role: "user", Content: "hello"}
 	cache.Record(msg1, cronmsg.CollapseKey)
 
-	msg2 := StoredMessage{Seq: 2, Message: spawnllm.Message{Role: "user", Content: "world"}}
+	msg2 := StoredMessage{Seq: 2, Role: "user", Content: "world"}
 	if cache.IsNoise(msg2, cronmsg.CollapseKey) {
 		t.Error("different content should not be noise")
 	}

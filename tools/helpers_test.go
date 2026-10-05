@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/PivotLLM/spawnllm"
 	"github.com/PivotLLM/toolspec"
 
 	"github.com/PivotLLM/ctxengine/memory"
@@ -68,10 +67,8 @@ func writeArchive(t *testing.T, dir, sessionKey string, msgs []memory.StoredMess
 
 func archiveMsg(seq int64, role, content string) memory.StoredMessage {
 	return memory.StoredMessage{
-		Seq: seq,
-		Message: spawnllm.Message{
-			Role:    role,
-			Content: content,
-		},
+		Seq:     seq,
+		Role:    role,
+		Content: content,
 	}
 }

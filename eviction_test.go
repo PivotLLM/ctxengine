@@ -364,8 +364,8 @@ func TestSweep_EvictedStaysEvicted(t *testing.T) {
 	base := aged[len(aged)-1].Seq
 	for i := range 12 {
 		aged = append(aged, memory.StoredMessage{
-			Seq:     base + int64(i+1),
-			Message: spawnllm.Message{Role: "assistant", Content: "more"},
+			Seq:  base + int64(i+1),
+			Role: "assistant", Content: "more",
 		})
 	}
 	noErr(t, store.SetHistoryWithSeqs("sess", aged))

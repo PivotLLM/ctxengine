@@ -105,14 +105,14 @@ func TestSeqAware_CoveredRangeSetFromActualSeqs(t *testing.T) {
 	stored := make([]memory.StoredMessage, 0, 11)
 	for i := range 10 {
 		stored = append(stored, memory.StoredMessage{
-			Seq:     int64(startSeq + i),
-			Message: spawnllm.Message{Role: "user", Content: strings.Repeat("a", 200)},
+			Seq:  int64(startSeq + i),
+			Role: "user", Content: strings.Repeat("a", 200),
 		})
 	}
 	if len(stored)%2 != 0 {
 		stored = append(stored, memory.StoredMessage{
-			Seq:     int64(startSeq + len(stored)),
-			Message: spawnllm.Message{Role: "assistant", Content: strings.Repeat("b", 200)},
+			Seq:  int64(startSeq + len(stored)),
+			Role: "assistant", Content: strings.Repeat("b", 200),
 		})
 	}
 
@@ -168,10 +168,10 @@ func TestSeqAware_CoveredRangeSetFromActualSeqs(t *testing.T) {
 // summarizer LLM include [#N] prefixes with the actual stored sequence numbers.
 func TestSeqAware_PromptContainsSeqPrefixes(t *testing.T) {
 	stored := []memory.StoredMessage{
-		{Seq: 42, Message: spawnllm.Message{Role: "user", Content: strings.Repeat("x", 500)}},
-		{Seq: 43, Message: spawnllm.Message{Role: "assistant", Content: strings.Repeat("y", 500)}},
-		{Seq: 44, Message: spawnllm.Message{Role: "user", Content: strings.Repeat("z", 500)}},
-		{Seq: 45, Message: spawnllm.Message{Role: "assistant", Content: strings.Repeat("w", 500)}},
+		{Seq: 42, Role: "user", Content: strings.Repeat("x", 500)},
+		{Seq: 43, Role: "assistant", Content: strings.Repeat("y", 500)},
+		{Seq: 44, Role: "user", Content: strings.Repeat("z", 500)},
+		{Seq: 45, Role: "assistant", Content: strings.Repeat("w", 500)},
 	}
 
 	store := newSeqStore(stored)
@@ -209,28 +209,24 @@ func TestSeqAware_PromptContainsSeqPrefixes(t *testing.T) {
 func TestSeqAware_PromptContainsToolMetadata(t *testing.T) {
 	stored := []memory.StoredMessage{
 		{
-			Seq: 50,
-			Message: spawnllm.Message{
-				Role:    "assistant",
-				Content: "I will inspect the file.",
-				ToolCalls: []spawnllm.ToolCall{
-					{
-						ID: "call_123",
-						Function: &spawnllm.FunctionCall{
-							Name:      "read_file",
-							Arguments: `{"path":"llmcontext/compress.go"}`,
-						},
+			Seq:     50,
+			Role:    "assistant",
+			Content: "I will inspect the file.",
+			ToolCalls: []spawnllm.ToolCall{
+				{
+					ID: "call_123",
+					Function: &spawnllm.FunctionCall{
+						Name:      "read_file",
+						Arguments: `{"path":"llmcontext/compress.go"}`,
 					},
 				},
 			},
 		},
 		{
-			Seq: 51,
-			Message: spawnllm.Message{
-				Role:       "tool",
-				ToolCallID: "call_123",
-				Content:    "file contents",
-			},
+			Seq:        51,
+			Role:       "tool",
+			ToolCallID: "call_123",
+			Content:    "file contents",
 		},
 	}
 	llm := &seqTrackingLLM{
@@ -339,8 +335,8 @@ func TestSeqAware_ExistingSummaryCoverageAndRefsSurviveNextCompaction(t *testing
 	stored := make([]memory.StoredMessage, 10)
 	for i := range stored {
 		stored[i] = memory.StoredMessage{
-			Seq:     int64(11 + i),
-			Message: spawnllm.Message{Role: "user", Content: strings.Repeat("x", 500)},
+			Seq:  int64(11 + i),
+			Role: "user", Content: strings.Repeat("x", 500),
 		}
 	}
 	store := newSeqStore(stored)

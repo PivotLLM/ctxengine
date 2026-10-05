@@ -333,7 +333,7 @@ func TestSetHistoryWithSeqs_NextSeqMonotonic(t *testing.T) {
 	// Unnumbered messages are minted after the highest seen (here 9 > counter 6).
 	noErr(t, s.SetHistoryWithSeqs("mono", []memory.StoredMessage{
 		memory.NewStoredMessage(9, spawnllm.Message{Role: "user", Content: "nine"}),
-		{Message: spawnllm.Message{Role: "assistant", Content: "unnumbered"}},
+		{Role: "assistant", Content: "unnumbered"},
 	}))
 	stored := s.GetHistoryWithSeqs("mono")
 	if len(stored) != 2 || stored[0].Seq != 9 || stored[1].Seq != 10 {

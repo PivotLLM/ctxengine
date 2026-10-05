@@ -151,7 +151,8 @@ func TestTrigger_AgeIgnoresSystemMessage(t *testing.T) {
 // existed: with nothing to measure, the age trigger must stay silent rather than
 // treat a zero time as 1970.
 func TestOldestAge_NoUsableTimestamp(t *testing.T) {
-	stored := []memory.StoredMessage{{Message: spawnllm.Message{Role: "user", Content: "x"}}}
+	// stored := []memory.StoredMessage{{Message: spawnllm.Message{Role: "user", Content: "x"}}}
+	stored := []memory.StoredMessage{{Role: "user", Content: "x"}}
 	if _, ok := oldestAge(stored, time.Now()); ok {
 		t.Error("a zero CreatedAt must report no usable age")
 	}
