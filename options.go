@@ -18,12 +18,15 @@ type FailureDumpFunc func(kind string, meta map[string]any, input, output string
 type RefusalClassifier func(finishReason, content string) (refused bool, detail string)
 
 // NoiseKeyFunc identifies messages that are repeated fires of one source (a
-// scheduled job, for instance) by a key: two messages with the same key are
-// duplicates whatever their timestamps say, and runs of them collapse. ok is
-// false for content that is not such a message.
+// scheduled job, for instance) by a key: two adjacent same-role messages with
+// the same key are repeats whatever their timestamps say, and the retained
+// tail collapses them to one. A message between them, such as a reply to the
+// first, makes the second a new request, not a repeat. ok is false for content
+// that is not such a message.
 type NoiseKeyFunc func(content string) (key string, ok bool)
 
-// noNoiseKey is the default NoiseKeyFunc: nothing collapses.
+// noNoiseKey is the default NoiseKeyFunc: no message has a key, so only
+// adjacent same-role messages with identical text count as repeats.
 func noNoiseKey(string) (string, bool) { return "", false }
 
 const (
@@ -303,8 +306,12 @@ func WithRefusalClassifier(fn RefusalClassifier) Option {
 }
 
 // WithNoiseKey sets the function that recognises repeated fires of one source
-// (the host's scheduled-job wrapper, say) so the tail and the summarizer input
-// collapse runs of them. Without it no message is treated as a repeat.
+// (the host's scheduled-job wrapper, say), whose text differs by timestamp.
+// The retained tail collapses adjacent repeats of one key to one message, and
+// a run of three or more fires of one job each answered by the same short
+// reply folds into one counted line in the summarizer input and in the
+// persisted window. Without it, only adjacent same-role messages with
+// identical text are repeats, and no run folds.
 func WithNoiseKey(fn NoiseKeyFunc) Option {
 	return func(c *managerConfig) { c.noiseKey = fn }
 }

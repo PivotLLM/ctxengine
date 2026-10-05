@@ -12,15 +12,22 @@ import (
 )
 
 // selectTail returns the suffix of history to retain in the context window,
-// together with the index in stored the caller should summarize up to: the
-// caller summarizes stored[:start] and keeps the returned tail.
+// together with start, the index in stored where that suffix begins. The
+// returned tail is stored[start:] less the adjacent repeats step 5 removes, and
+// it always holds stored[start:]'s newest message and newest user message.
 //
-// start is derived as len(stored)-len(tail) rather than from the span walk, so
-// it also absorbs the messages steps 4 and 5 remove. Those messages are noise
-// duplicates and partial tool plumbing; folding them into the summarized prefix
-// is what actually removes them from the live window. The consequence is that a
-// collapsed duplicate can appear both in the summary input and (as its surviving
-// copy) in the tail — harmless, since the two are identical by definition.
+// The caller summarizes stored[:start], exactly. The repeats step 5 removes go
+// to neither the summary nor the window: each is an adjacent copy of a message
+// the tail keeps, and the archive still holds it. start is not
+// len(stored)-len(tail); deriving it from the collapsed length shifted it back
+// by the number of repeats, which handed retained messages to the summary and
+// hid the newest user message from the caller's keep-newest-user clamp.
+//
+// The tail is not necessarily what the window ends up holding: when the pass
+// persists it, collapseRetainedCronRuns folds an answered run of
+// repetitiveRunThreshold or more fires of one job (each answered by the same
+// short reply) into one counted anchor. A fire with no reply after it, such as
+// the request the next dispatch answers, is never part of such a run.
 //
 // Algorithm:
 //  1. Walk history newest-to-oldest in turn groups (see resolveGroup).
@@ -30,7 +37,8 @@ import (
 //     regardless of budget or age.
 //  4. Advance start past a leading partial tool group so the tail begins on a
 //     clean boundary, handing those messages to the summary.
-//  5. Collapse consecutive noise messages in the retained tail to at most one.
+//  5. Collapse consecutive noise repeats in the retained tail to one (see
+//     collapseStoredNoise).
 //
 // A budget <= 0 disables the budget check and a maxAge <= 0 disables the age
 // check; the floor always applies. estimate converts a message slice into an
@@ -92,8 +100,7 @@ func selectTail(
 	if start >= len(stored) {
 		return nil, len(stored)
 	}
-	tail := collapseStoredNoise(stored[start:], noise)
-	return tail, len(stored) - len(tail)
+	return collapseStoredNoise(stored[start:], noise), start
 }
 
 // isOlderThan reports whether ts is more than maxAge before now. A zero
@@ -147,68 +154,91 @@ func resolveGroup(history []spawnllm.Message, end int) groupBounds {
 	return groupBounds{end, end}
 }
 
-// countMeaningfulMessages counts non-noise messages in a slice using the same
-// stateful noise definition as the storage layer: identical content for the same
-// role, or an identical noise key for repeated-source messages.
+// countMeaningfulMessages counts non-noise messages in a slice: a message that
+// repeats the one immediately before it (see isTailNoise) is not counted.
 func countMeaningfulMessages(msgs []spawnllm.Message, noise NoiseKeyFunc) int {
-	lastByRole := make(map[string]string)
-	lastKey := ""
 	n := 0
-	for _, m := range msgs {
-		if isTailNoise(m, lastByRole, lastKey, noise) {
+	var prev *spawnllm.Message
+	for i := range msgs {
+		if isTailNoise(msgs[i], prev, noise) {
 			continue
 		}
 		n++
-		if key, ok := noise(m.Content); ok {
-			lastKey = key
-		}
-		lastByRole[m.Role] = m.Content
+		prev = &msgs[i]
 	}
 	return n
 }
 
-// collapseStoredNoise removes redundant consecutive noise messages, keeping at
-// most one instance from each run of identical same-role messages.
+// collapseStoredNoise removes consecutive noise repeats, keeping one message
+// of each run of repeats (see isTailNoise): the first, unless the run holds
+// the newest message or the newest user message, which then takes its place.
+// A repeat is judged against the previous kept message only, so anything in
+// between (an assistant reply to a scheduled fire, a different job, a tool
+// exchange) ends the run: two fires of one job with a reply between them are
+// both kept.
+//
+// The newest message and the newest user message are never removed, whatever
+// they repeat. The newest user message is the request the next dispatch
+// answers; collapsing it as a duplicate of an earlier fire leaves the model
+// with nothing to respond to.
 func collapseStoredNoise(msgs []memory.StoredMessage, noise NoiseKeyFunc) []memory.StoredMessage {
 	if len(msgs) == 0 {
 		return msgs
 	}
+	newest := len(msgs) - 1
+	newestUser := lastUserStoredIndex(msgs)
 	out := make([]memory.StoredMessage, 0, len(msgs))
-	lastByRole := make(map[string]string)
-	lastKey := ""
-	for _, m := range msgs {
-		if isTailNoise(m.Message, lastByRole, lastKey, noise) {
-			continue
+	var prev *spawnllm.Message
+	for i := range msgs {
+		if isTailNoise(msgs[i].Message, prev, noise) {
+			if i != newest && i != newestUser {
+				continue
+			}
+			// The newest (or newest user) message repeats the kept one before
+			// it: keep it in that one's place, so the run still collapses to
+			// one message and that message is the current request.
+			out = out[:len(out)-1]
 		}
-		if key, ok := noise(m.Content); ok {
-			lastKey = key
-		}
-		lastByRole[m.Role] = m.Content
-		out = append(out, m)
+		out = append(out, msgs[i])
+		prev = &msgs[i].Message
 	}
 	return out
 }
 
-// isTailNoise returns true if m is a noise duplicate given the current state.
+// isTailNoise reports whether m repeats prev, the message kept immediately
+// before it (nil when there is none). A repeat has the same role as prev and
+// either the same noise key (repeated fires of one source, whose text differs
+// by timestamp) or, when neither is keyed, identical content. Only an adjacent
+// repeat counts: noise collapse folds a burst of identical messages, it does
+// not deduplicate a conversation, where a scheduled job firing again after a
+// reply is a new request.
 //
-// Tool plumbing is never noise, whatever its text. An assistant message that
-// makes a tool call carries empty Content, so a run of them looks like a run of
-// identical messages to the content comparison below — collapsing one drops the
-// tool_calls it declared and orphans the tool results that follow, which strict
-// providers reject outright ("Messages with role 'tool' must be a response to a
-// preceding message with 'tool_calls'"). Tool results are excluded for the
-// mirror reason: two calls to one tool can legitimately return the same text,
-// and dropping the second breaks the assistant message that expects it.
+// Tool plumbing is never noise, whatever its text, and never anchors a repeat.
+// An assistant message that makes a tool call carries empty Content, so a run
+// of them looks like a run of identical messages to the content comparison
+// below — collapsing one drops the tool_calls it declared and orphans the tool
+// results that follow, which strict providers reject outright ("Messages with
+// role 'tool' must be a response to a preceding message with 'tool_calls'").
+// Tool results are excluded for the mirror reason: two calls to one tool can
+// legitimately return the same text, and dropping the second breaks the
+// assistant message that expects it.
 //
 // Noise collapse exists for repeated conversational text — scheduled-job
 // wrappers, a user sending the same thing twice — not for structural messages.
-func isTailNoise(m spawnllm.Message, lastByRole map[string]string, lastKey string, noise NoiseKeyFunc) bool {
-	if len(m.ToolCalls) > 0 || m.ToolCallID != "" {
+func isTailNoise(m spawnllm.Message, prev *spawnllm.Message, noise NoiseKeyFunc) bool {
+	if isToolPlumbing(m) || prev == nil || isToolPlumbing(*prev) || m.Role != prev.Role {
 		return false
 	}
-	if key, ok := noise(m.Content); ok {
-		return key != "" && key == lastKey
+	key, keyed := noise(m.Content)
+	prevKey, prevKeyed := noise(prev.Content)
+	if keyed || prevKeyed {
+		return keyed && prevKeyed && key != "" && key == prevKey
 	}
-	prev, ok := lastByRole[m.Role]
-	return ok && m.Content == prev
+	return m.Content == prev.Content
+}
+
+// isToolPlumbing reports whether m is part of a tool exchange: an assistant
+// message declaring tool calls, or a tool result.
+func isToolPlumbing(m spawnllm.Message) bool {
+	return len(m.ToolCalls) > 0 || m.ToolCallID != ""
 }

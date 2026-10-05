@@ -89,7 +89,10 @@ func TestItem1_LargeMsgRemovedBeforePersist(t *testing.T) {
 // propagates Save() failures as ErrCompressionFailed.
 func TestItem1_PersistResultReturnsErrorOnSaveFailure(t *testing.T) {
 	store := &failSaveStore{}
-	store.history = makeConversation(5, 100)
+	// Distinct and over the retain budget, so the pass has something to
+	// summarize: identical turns used to be collapsed into the summary, which
+	// was the only reason a 400-token history compacted here.
+	store.history = distinctConversation(20, 300)
 
 	llm := &mockLLM{
 		responses: []string{validSummaryJSON("goal")},
