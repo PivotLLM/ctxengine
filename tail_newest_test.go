@@ -1,5 +1,7 @@
-// ctxengine
-// License: MIT
+/******************************************************************************
+ * Copyright (c) 2026 Tenebris Technologies Inc.                              *
+ * Please see LICENSE file for details.                                       *
+ ******************************************************************************/
 
 package ctxengine
 
@@ -19,19 +21,19 @@ import (
 	"github.com/PivotLLM/ctxengine/memory"
 )
 
-// karenJob is the fingerprint of the scheduled job in the incident.
-const karenJob = "828e07b7"
+// brokenJob is the fingerprint of the scheduled job in the incident.
+const brokenJob = "828e07b7"
 
-// karenFire builds a fire of the incident's job, wrapped exactly as the host's
+// brokenFire builds a fire of the incident's job, wrapped exactly as the host's
 // scheduler wraps it; cronmsg.CollapseKey keys it by the bracketed fingerprint.
-func karenFire(at time.Time) spawnllm.Message {
-	return msg("user", cronmsg.Build(karenJob, at, "Run the morning report."))
+func brokenFire(at time.Time) spawnllm.Message {
+	return msg("user", cronmsg.Build(brokenJob, at, "Run the morning report."))
 }
 
-// karenHistory is the stored conversation of the incident, seqs 536-545, with
+// brokenHistory is the stored conversation of the incident, seqs 536-545, with
 // the CreatedAt ages that made the age trigger cut between 537 and 538. The
 // message the turn adds, 546, is not included.
-func karenHistory(now time.Time) []memory.StoredMessage {
+func brokenHistory(now time.Time) []memory.StoredMessage {
 	day := 24 * time.Hour
 	type row struct {
 		m   spawnllm.Message
@@ -39,14 +41,14 @@ func karenHistory(now time.Time) []memory.StoredMessage {
 	}
 	rows := []row{
 		{msg("assistant", "Report: everything nominal (536)."), 10 * day},
-		{karenFire(now.Add(-10 * day)), 10 * day}, // 537
+		{brokenFire(now.Add(-10 * day)), 10 * day}, // 537
 		{msg("assistant", "Report for 538."), 4 * day},
-		{karenFire(now.Add(-4 * day)), 4 * day}, // 539
-		{karenFire(now.Add(-3 * day)), 3 * day}, // 540: adjacent to 539
+		{brokenFire(now.Add(-4 * day)), 4 * day}, // 539
+		{brokenFire(now.Add(-3 * day)), 3 * day}, // 540: adjacent to 539
 		{msg("assistant", "Report for 541."), 3 * day},
-		{karenFire(now.Add(-2 * day)), 2 * day}, // 542
+		{brokenFire(now.Add(-2 * day)), 2 * day}, // 542
 		{msg("assistant", "Report for 543."), 2 * day},
-		{karenFire(now.Add(-1 * day)), 1 * day}, // 544
+		{brokenFire(now.Add(-1 * day)), 1 * day}, // 544
 		{msg("assistant", "Report for 545."), 1 * day},
 	}
 	out := make([]memory.StoredMessage, len(rows))
@@ -208,11 +210,11 @@ func assertLastUserAssembled(t *testing.T, mgr *Manager, want string) {
 func TestAddUserMessage_AgeCompactionKeepsTheNewCronFire(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
-	store := newSeqWindowStore(karenHistory(now))
+	store := newSeqWindowStore(brokenHistory(now))
 	caller := &summaryRecorder{}
 	mgr := newAgeTriggeredManager(t, store, caller)
 
-	fire := karenFire(now)
+	fire := brokenFire(now)
 	seq, err := mgr.AddUserMessage(ctx, fire)
 	if err != nil {
 		t.Fatalf("AddUserMessage: %v", err)
@@ -262,17 +264,17 @@ func TestAddUserMessage_AnsweredRunFoldsAndKeepsTheNewFire(t *testing.T) {
 	history := []memory.StoredMessage{
 		at(1, 10*day, msg("user", "old question")),
 		at(2, 10*day, msg("assistant", "old answer")),
-		at(3, 3*day, karenFire(now.Add(-3*day))),
+		at(3, 3*day, brokenFire(now.Add(-3*day))),
 		at(4, 3*day, msg("assistant", "ok")),
-		at(5, 2*day, karenFire(now.Add(-2*day))),
+		at(5, 2*day, brokenFire(now.Add(-2*day))),
 		at(6, 2*day, msg("assistant", "ok")),
-		at(7, 1*day, karenFire(now.Add(-1*day))),
+		at(7, 1*day, brokenFire(now.Add(-1*day))),
 		at(8, 1*day, msg("assistant", "ok")),
 	}
 	store := newSeqWindowStore(history)
 	mgr := newAgeTriggeredManager(t, store, &summaryRecorder{})
 
-	fire := karenFire(now)
+	fire := brokenFire(now)
 	if _, err := mgr.AddUserMessage(context.Background(), fire); err != nil {
 		t.Fatalf("AddUserMessage: %v", err)
 	}
@@ -280,7 +282,7 @@ func TestAddUserMessage_AnsweredRunFoldsAndKeepsTheNewFire(t *testing.T) {
 	if len(store.window) != 2 {
 		t.Fatalf("window = %+v, want the run's anchor and the new fire", storedToPlain(store.window))
 	}
-	if !strings.HasPrefix(store.window[0].Content, "[scheduled job "+karenJob+" fired ×3") {
+	if !strings.HasPrefix(store.window[0].Content, "[scheduled job "+brokenJob+" fired ×3") {
 		t.Errorf("window[0] = %q, want the folded run's anchor", store.window[0].Content)
 	}
 	if got := store.window[1]; got.Seq != 9 || got.Content != fire.Content {
@@ -298,8 +300,8 @@ func TestCompress_CollapsedRepeatsAreNotSummarized(t *testing.T) {
 	history := []memory.StoredMessage{
 		{Seq: 10, CreatedAt: now.Add(-10 * day), Message: msg("user", "old question")},
 		{Seq: 11, CreatedAt: now.Add(-10 * day), Message: msg("assistant", "old answer")},
-		{Seq: 12, CreatedAt: now.Add(-day), Message: karenFire(now.Add(-day))},
-		{Seq: 13, CreatedAt: now.Add(-day), Message: karenFire(now.Add(-day + time.Minute))}, // repeats 12
+		{Seq: 12, CreatedAt: now.Add(-day), Message: brokenFire(now.Add(-day))},
+		{Seq: 13, CreatedAt: now.Add(-day), Message: brokenFire(now.Add(-day + time.Minute))}, // repeats 12
 		{Seq: 14, CreatedAt: now.Add(-day), Message: msg("assistant", "Report for 14.")},
 		{Seq: 15, CreatedAt: now, Message: msg("user", "thanks")},
 	}
@@ -347,7 +349,7 @@ func TestCollapseStoredNoise(t *testing.T) {
 		}
 		return out
 	}
-	fire := func(n int) spawnllm.Message { return karenFire(now.Add(time.Duration(n) * time.Minute)) }
+	fire := func(n int) spawnllm.Message { return brokenFire(now.Add(time.Duration(n) * time.Minute)) }
 
 	tests := []struct {
 		name  string
@@ -356,7 +358,7 @@ func TestCollapseStoredNoise(t *testing.T) {
 	}{
 		{
 			name:  "incident sequence: only the adjacent repeat collapses",
-			input: append(karenHistory(now), memory.StoredMessage{Seq: 546, Message: fire(0)}),
+			input: append(brokenHistory(now), memory.StoredMessage{Seq: 546, Message: fire(0)}),
 			want:  []int64{536, 537, 538, 539, 541, 542, 543, 544, 545, 546},
 		},
 		{

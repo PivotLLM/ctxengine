@@ -1,5 +1,7 @@
-// ctxengine
-// License: MIT
+/******************************************************************************
+ * Copyright (c) 2026 Tenebris Technologies Inc.                              *
+ * Please see LICENSE file for details.                                       *
+ ******************************************************************************/
 
 // Package logger is llmcontext's host-injectable logging seam. The engine pulls
 // in no host logging stack; a host installs a Backend via SetBackend so the

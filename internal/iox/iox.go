@@ -1,5 +1,7 @@
-// ctxengine
-// License: MIT
+/******************************************************************************
+ * Copyright (c) 2026 Tenebris Technologies Inc.                              *
+ * Please see LICENSE file for details.                                       *
+ ******************************************************************************/
 
 // Package iox holds small I/O helpers shared by ctxengine's packages.
 package iox

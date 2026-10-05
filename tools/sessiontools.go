@@ -1,7 +1,7 @@
-// ctxengine
-// License: MIT
-//
-// Copyright (c) 2026 Tenebris Technologies Inc.
+/******************************************************************************
+ * Copyright (c) 2026 Tenebris Technologies Inc.                              *
+ * Please see LICENSE file for details.                                       *
+ ******************************************************************************/
 
 // Package tools exposes the session history and lifecycle tools as
 // toolspec definitions with BARE names ("messages", "search", "compact",

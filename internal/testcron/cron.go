@@ -1,5 +1,7 @@
-// ctxengine
-// License: MIT
+/******************************************************************************
+ * Copyright (c) 2026 Tenebris Technologies Inc.                              *
+ * Please see LICENSE file for details.                                       *
+ ******************************************************************************/
 
 // Package testcron is a test-only copy of the host's cron-message wrapper
 // format (ClawEh's cronmsg package). A host scheduler wraps a scheduled message
