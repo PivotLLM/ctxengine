@@ -152,8 +152,10 @@ func (m *Manager) doCompress(ctx context.Context, safetyNet bool) error {
 		// reject with "messages must contain at least one item with role='user'"
 		// (a non-retriable 400 that kills the turn). This clamp overrides the age
 		// cap too: an old-but-latest user message is still the anchor of the turn.
-		if lu := lastUserStoredIndex(currentStored); lu >= 0 && lu < tailStart {
-			tailStart = lu
+		// It checks the messages actually kept, not an index: the tail is
+		// collapsed, so lu >= tailStart alone does not prove lu survived.
+		if lu := lastUserStoredIndex(currentStored); lu >= 0 && !containsSeq(storedTail, currentStored[lu].Seq) {
+			tailStart = min(tailStart, lu)
 			storedTail = currentStored[tailStart:] // keep tail/tailStart consistent
 		}
 		// Never empty the live window. In a long in-flight tool-call sequence the
@@ -170,6 +172,10 @@ func (m *Manager) doCompress(ctx context.Context, safetyNet bool) error {
 				"kept":        len(storedTail),
 			})
 		}
+		// The summarizer gets the prefix only. Repeats the tail collapsed out of
+		// currentStored[tailStart:] are not summarized: each is an adjacent copy
+		// of a message the window keeps, it stays in the archive, and sent on
+		// its own a scheduled fire reads like an open request.
 		toSummarize := currentStored[:tailStart]
 
 		if len(toSummarize) == 0 {
@@ -188,6 +194,12 @@ func (m *Manager) doCompress(ctx context.Context, safetyNet bool) error {
 
 		llmSucceeded = true
 		latestSummary = newSummary
+		if dropped := droppedRepeatSeqs(currentStored[tailStart:], storedTail); len(dropped) > 0 {
+			logger.InfoCF("llmcontext", "compaction dropped adjacent repeats from the live window (kept in the archive)", map[string]any{
+				"session_key": m.sessionKey,
+				"seqs":        dropped,
+			})
+		}
 		currentStored = storedTail
 		currentConversation = storedToPlain(storedTail)
 
@@ -315,6 +327,32 @@ func lastUserStoredIndex(stored []memory.StoredMessage) int {
 		}
 	}
 	return -1
+}
+
+// containsSeq reports whether stored holds the message with sequence number seq.
+func containsSeq(stored []memory.StoredMessage, seq int64) bool {
+	return slices.ContainsFunc(stored, func(sm memory.StoredMessage) bool { return sm.Seq == seq })
+}
+
+// droppedRepeatSeqs returns the seqs of window, the messages from the tail's
+// start onwards, that the retained tail does not hold: the adjacent repeats
+// collapseStoredNoise removed. They are neither summarized nor kept in the
+// window; the archive still holds them.
+func droppedRepeatSeqs(window, tail []memory.StoredMessage) []int64 {
+	if len(window) == len(tail) {
+		return nil
+	}
+	kept := make(map[int64]bool, len(tail))
+	for _, sm := range tail {
+		kept[sm.Seq] = true
+	}
+	var out []int64
+	for _, sm := range window {
+		if !kept[sm.Seq] {
+			out = append(out, sm.Seq)
+		}
+	}
+	return out
 }
 
 // handleNormalPostLoop handles post-loop logic for the normal (non-safety-net) path.

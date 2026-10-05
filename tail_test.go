@@ -179,59 +179,57 @@ func TestSelectTail_LeadingToolGroupTrimmed(t *testing.T) {
 	}
 }
 
-// TestSelectTail_NoiseCollapsed verifies that consecutive identical same-role
-// messages are collapsed to at most one in the retained tail.
-func TestSelectTail_NoiseCollapsed(t *testing.T) {
+// TestSelectTail_NonConsecutiveRepeatsKept verifies that noise collapse only
+// folds adjacent repeats: a message that repeats an earlier one with a reply
+// in between is a new turn and is kept.
+func TestSelectTail_NonConsecutiveRepeatsKept(t *testing.T) {
 	history := []spawnllm.Message{
 		msg("user", "hello"),
 		msg("assistant", "hi"),
-		msg("user", "hello"),   // duplicate of history[0]
-		msg("assistant", "hi"), // duplicate of history[1]
+		msg("user", "hello"),   // repeats history[0], but a reply came between
+		msg("assistant", "hi"), // repeats history[1], likewise
 		msg("user", "different"),
 	}
 	got := selectTailMsgs(history, 10000, 0)
-	// Collapsed: only one "hello" user and one "hi" assistant should survive each.
-	userCount := 0
-	for _, m := range got {
-		if m.Role == "user" && m.Content == "hello" {
-			userCount++
-		}
-	}
-	if userCount > 1 {
-		t.Errorf("expected at most 1 'hello' user message, got %d", userCount)
-	}
-	assistantCount := 0
-	for _, m := range got {
-		if m.Role == "assistant" && m.Content == "hi" {
-			assistantCount++
-		}
-	}
-	if assistantCount > 1 {
-		t.Errorf("expected at most 1 'hi' assistant message, got %d", assistantCount)
+	if len(got) != len(history) {
+		t.Errorf("expected all %d messages kept, got %d: %+v", len(history), len(got), got)
 	}
 }
 
 // TestSelectTail_CronNoiseCollapsed verifies cron-wrapper messages with the
-// same payload are treated as noise and collapsed.
+// same payload collapse when adjacent, and are kept when a reply separates
+// them: each answered fire is its own turn.
 func TestSelectTail_CronNoiseCollapsed(t *testing.T) {
 	wrap := func(ts, payload string) spawnllm.Message {
 		return msg("user", testCronPrefix+"2026-01-01 "+ts+":\n"+payload)
 	}
-	history := []spawnllm.Message{
+	countCron := func(msgs []spawnllm.Message) int {
+		n := 0
+		for _, m := range msgs {
+			if strings.HasPrefix(m.Content, testCronPrefix) {
+				n++
+			}
+		}
+		return n
+	}
+
+	adjacent := []spawnllm.Message{
+		wrap("10:00", "run backup"),
+		wrap("11:00", "run backup"), // same payload, adjacent — noise
+		msg("assistant", "done"),
+	}
+	if n := countCron(selectTailMsgs(adjacent, 10000, 0)); n != 1 {
+		t.Errorf("adjacent fires: expected 1 cron message, got %d", n)
+	}
+
+	answered := []spawnllm.Message{
 		wrap("10:00", "run backup"),
 		msg("assistant", "done"),
-		wrap("11:00", "run backup"), // same payload — noise
+		wrap("11:00", "run backup"), // a reply came between — kept
 		msg("assistant", "done"),
 	}
-	got := selectTailMsgs(history, 10000, 0)
-	cronCount := 0
-	for _, m := range got {
-		if strings.HasPrefix(m.Content, testCronPrefix) {
-			cronCount++
-		}
-	}
-	if cronCount > 1 {
-		t.Errorf("expected cron noise collapsed to 1, got %d cron messages", cronCount)
+	if n := countCron(selectTailMsgs(answered, 10000, 0)); n != 2 {
+		t.Errorf("answered fires: expected 2 cron messages, got %d", n)
 	}
 }
 
