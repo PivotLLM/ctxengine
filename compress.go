@@ -91,6 +91,7 @@ func (m *Manager) doCompress(ctx context.Context, safetyNet bool) error {
 	rec := &compactionRecorder{
 		sessionKey:  m.sessionKey,
 		debugPath:   debugPath,
+		debugPerm:   m.cfg.filePerm,
 		failureDump: m.cfg.failureDump,
 	}
 	beforeMsgs := len(storedConversation)

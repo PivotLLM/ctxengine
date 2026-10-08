@@ -9,12 +9,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/PivotLLM/spawnllm"
 
+	"github.com/PivotLLM/ctxengine/internal/iox"
 	"github.com/PivotLLM/ctxengine/logger"
 	"github.com/PivotLLM/ctxengine/memory"
 )
@@ -151,6 +153,7 @@ func formatDateRange(from, to time.Time) string {
 type compactionRecorder struct {
 	sessionKey string
 	debugPath  string // "" disables verbatim capture
+	debugPerm  os.FileMode
 	// failureDump, when set, receives the request + raw response of each FAILED
 	// attempt (status != "ok").
 	failureDump FailureDumpFunc
@@ -207,7 +210,7 @@ func (r *compactionRecorder) record(model, status, detail string, dur time.Durat
 	if err != nil {
 		return
 	}
-	f, err := os.OpenFile(r.debugPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := openDebugCapture(r.debugPath, r.debugPerm)
 	if err != nil {
 		logger.WarnCF("llmcontext", "compaction debug capture: open failed", map[string]any{
 			"session_key": r.sessionKey,
@@ -228,6 +231,27 @@ func (r *compactionRecorder) record(model, status, detail string, dur time.Durat
 			"error":       err.Error(),
 		})
 	}
+}
+
+// openDebugCapture opens path for appending. A new file is created at perm,
+// set with chmod so the umask does not alter it; an existing one is changed to
+// perm if its mode differs.
+func openDebugCapture(path string, perm os.FileMode) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, perm) //nolint:gosec // G304: compact.jsonl in the host's workspace directory
+	if err == nil {
+		if chmodErr := f.Chmod(perm); chmodErr != nil {
+			logger.WarnCF("llmcontext", "compaction debug capture: mode change failed", map[string]any{
+				"path":  path,
+				"error": chmodErr.Error(),
+			})
+		}
+		return f, nil
+	}
+	if !errors.Is(err, fs.ErrExist) {
+		return nil, err
+	}
+	iox.SetFileMode("llmcontext", path, perm)
+	return os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0) //nolint:gosec // G304: as above
 }
 
 // dumpFailure hands a diagnostic snapshot of one failed summarization attempt
