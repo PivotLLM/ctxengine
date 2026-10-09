@@ -15,6 +15,7 @@ import (
 
 	"github.com/PivotLLM/spawnllm"
 
+	"github.com/PivotLLM/ctxengine/internal/iox"
 	"github.com/PivotLLM/ctxengine/logger"
 	"github.com/PivotLLM/ctxengine/memory"
 )
@@ -33,6 +34,37 @@ type SQLiteStore struct {
 	// noiseKey recognises repeated-source messages for the noise classifier.
 	// Nil (the default) means only identical same-role content is noise.
 	noiseKey memory.NoiseKeyFunc
+	// folderPerm and filePerm are the modes of the directory and archive
+	// files the store creates.
+	folderPerm os.FileMode
+	filePerm   os.FileMode
+}
+
+// StoreOption configures NewSQLiteStore.
+type StoreOption func(*SQLiteStore)
+
+// WithFolderPermissions sets the mode of the sessions directory when
+// NewSQLiteStore creates it (default memory.DefaultFolderPermissions). An
+// existing directory is left as it is. Only the permission bits are used; 0
+// keeps the default.
+func WithFolderPermissions(perm os.FileMode) StoreOption {
+	return func(s *SQLiteStore) {
+		if perm &= os.ModePerm; perm != 0 {
+			s.folderPerm = perm
+		}
+	}
+}
+
+// WithFilePermissions sets the mode of the archive databases and their -wal
+// and -shm files (default memory.DefaultFilePermissions). Existing files whose
+// mode differs are changed to it when opened. Only the permission bits are
+// used; 0 keeps the default.
+func WithFilePermissions(perm os.FileMode) StoreOption {
+	return func(s *SQLiteStore) {
+		if perm &= os.ModePerm; perm != 0 {
+			s.filePerm = perm
+		}
+	}
 }
 
 // sessionHandle is the cached per-session state: the archive handle and the
@@ -46,13 +78,31 @@ type sessionHandle struct {
 	closed  bool
 }
 
-// NewSQLiteStore creates a store rooted at dir, creating the directory if
-// needed. No database is opened until a session is used.
-func NewSQLiteStore(dir string) (*SQLiteStore, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // G301: the host's sessions directory; its mode is the host's decision, applied only when ctxengine creates it
-		return nil, fmt.Errorf("session: create directory: %w", err)
+// NewSQLiteStore creates a store rooted at dir. A missing dir is created and
+// set to the folder mode; an existing one is left as it is. No database is
+// opened until a session is used.
+func NewSQLiteStore(dir string, opts ...StoreOption) (*SQLiteStore, error) {
+	s := &SQLiteStore{
+		dir:        dir,
+		sessions:   make(map[string]*sessionHandle),
+		folderPerm: memory.DefaultFolderPermissions,
+		filePerm:   memory.DefaultFilePermissions,
 	}
-	return &SQLiteStore{dir: dir, sessions: make(map[string]*sessionHandle)}, nil
+	for _, o := range opts {
+		o(s)
+	}
+	if err := iox.EnsureDir(dir, s.folderPerm); err != nil {
+		return nil, fmt.Errorf("session: %w", err)
+	}
+	return s, nil
+}
+
+// openOptions passes the store's modes to memory.Open.
+func (s *SQLiteStore) openOptions() []memory.OpenOption {
+	return []memory.OpenOption{
+		memory.WithFolderPermissions(s.folderPerm),
+		memory.WithFilePermissions(s.filePerm),
+	}
 }
 
 // SetNoiseKey installs the function that recognises repeated fires of one
@@ -87,7 +137,7 @@ func (s *SQLiteStore) with(key string, fn func(a *memory.ArchiveStore, h *sessio
 		if h.archive == nil {
 			// Open logs the cause of a failure itself; the handle stays
 			// unopened so the next call retries.
-			a, err := memory.Open(memory.ArchivePath(s.dir, key))
+			a, err := memory.Open(memory.ArchivePath(s.dir, key), s.openOptions()...)
 			if err != nil {
 				h.mu.Unlock()
 				return err

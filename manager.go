@@ -684,7 +684,9 @@ func (m *Manager) getOrOpenArchive() *memory.ArchiveStore {
 		return m.archive
 	}
 	path := memory.ArchivePath(m.cfg.archiveDir, m.sessionKey)
-	store, err := memory.Open(path)
+	store, err := memory.Open(path,
+		memory.WithFolderPermissions(m.cfg.folderPerm),
+		memory.WithFilePermissions(m.cfg.filePerm))
 	if err != nil && !errors.Is(err, memory.ErrArchiveUnavailable) {
 		logger.WarnCF("llmcontext", "archive open failed", map[string]any{
 			"session_key": m.sessionKey,

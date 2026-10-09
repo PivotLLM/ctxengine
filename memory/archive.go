@@ -189,8 +189,21 @@ func openReadOnly(path string) (*sql.DB, error) {
 
 // Open opens (or creates) an archive database at path.
 // Enables WAL mode, creates schema, and runs an FTS5 integrity check.
+// A missing parent directory and database file are created with the modes
+// set by opts (DefaultFolderPermissions, DefaultFilePermissions), and an
+// existing database and its -wal and -shm files are changed to the file mode.
 // On failure it returns a store with unavailable=true plus ErrArchiveUnavailable.
-func Open(path string) (*ArchiveStore, error) {
+func Open(path string, opts ...OpenOption) (*ArchiveStore, error) {
+	cfg := openConfig{folderPerm: DefaultFolderPermissions, filePerm: DefaultFilePermissions}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	if err := prepareArchiveFiles(path, cfg); err != nil {
+		logger.WarnCF("memory", "archive create failed",
+			map[string]any{"path": path, "error": err.Error()})
+		return &ArchiveStore{path: path, unavailable: true}, ErrArchiveUnavailable
+	}
+
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		logger.WarnCF("memory", "archive open failed",

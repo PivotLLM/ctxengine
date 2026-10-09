@@ -5,6 +5,18 @@
 
 package ctxengine
 
+import (
+	"os"
+
+	"github.com/PivotLLM/ctxengine/memory"
+)
+
+// Default modes for the directories and files ctxengine creates: owner-only.
+const (
+	DefaultFolderPermissions os.FileMode = memory.DefaultFolderPermissions
+	DefaultFilePermissions   os.FileMode = memory.DefaultFilePermissions
+)
+
 // Option is a functional option for configuring a Manager.
 type Option func(*managerConfig)
 
@@ -192,6 +204,10 @@ type managerConfig struct {
 	// writers. Defaults to DefaultEvictionRoles(); override via
 	// WithEvictionRoles.
 	evictionRoles EvictionRoles
+	// folderPerm and filePerm are the modes of the directories and files
+	// ctxengine creates (archive databases, compact.jsonl).
+	folderPerm os.FileMode
+	filePerm   os.FileMode
 }
 
 func defaultManagerConfig() managerConfig {
@@ -212,6 +228,8 @@ func defaultManagerConfig() managerConfig {
 		tokenSafetyMargin:   defaultTokenSafetyMargin,
 		eviction:            DefaultEvictionPolicy(),
 		evictionRoles:       DefaultEvictionRoles(),
+		folderPerm:          DefaultFolderPermissions,
+		filePerm:            DefaultFilePermissions,
 	}
 }
 
@@ -347,9 +365,33 @@ func WithContextWindow(tokens int) Option {
 // WithArchiveDir sets the directory used to store per-session SQLite archive
 // databases. The ContextManager derives the archive path as
 // filepath.Join(dir, sanitizedKey+".archive.db") on first write.
-// If dir is empty, archive writes are silently skipped.
+// If dir is empty, archive writes are silently skipped. A missing dir is
+// created at the folder mode (see WithFolderPermissions).
 func WithArchiveDir(dir string) Option {
 	return func(c *managerConfig) { c.archiveDir = dir }
+}
+
+// WithFolderPermissions sets the mode of the archive directory when ctxengine
+// creates it (default DefaultFolderPermissions). An existing directory is left
+// as it is. Only the permission bits are used; 0 keeps the default.
+func WithFolderPermissions(perm os.FileMode) Option {
+	return func(c *managerConfig) {
+		if perm &= os.ModePerm; perm != 0 {
+			c.folderPerm = perm
+		}
+	}
+}
+
+// WithFilePermissions sets the mode of the files ctxengine creates: the
+// archive database with its -wal and -shm files, and compact.jsonl (default
+// DefaultFilePermissions). Existing files whose mode differs are changed to
+// it. Only the permission bits are used; 0 keeps the default.
+func WithFilePermissions(perm os.FileMode) Option {
+	return func(c *managerConfig) {
+		if perm &= os.ModePerm; perm != 0 {
+			c.filePerm = perm
+		}
+	}
 }
 
 // WithOverheadTokens sets the fixed token overhead added to the post-Build token

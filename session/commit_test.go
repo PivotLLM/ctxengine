@@ -82,12 +82,16 @@ func TestCommitCompaction(t *testing.T) {
 	}
 }
 
-// TestWriteErrorsAreReturned removes the store directory so every write
-// fails, and checks each write method reports it instead of swallowing it.
+// TestWriteErrorsAreReturned replaces the store directory with a file so
+// every write fails (a missing directory would be recreated), and checks each
+// write method reports it instead of swallowing it.
 func TestWriteErrorsAreReturned(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, dir)
 	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	msg := spawnllm.Message{Role: "user", Content: "x"}

@@ -58,6 +58,15 @@ through `memory.OpenReadOnly` and its `Window()` / `State()` methods;
 `memory.ListSessions` and `memory.DeleteSession` enumerate and remove whole
 sessions. Truncation deletes window rows; nothing is logically skipped.
 
+Directories ctxengine creates are `0700` and its files (databases with their
+`-wal`/`-shm` files, `compact.jsonl`) are `0600`; existing files with another
+mode are changed to it, existing directories are left alone. To change the
+modes:
+
+- `ctxengine.WithFolderPermissions(perm)` / `ctxengine.WithFilePermissions(perm)` — Manager options.
+- `session.NewSQLiteStore(dir, session.WithFolderPermissions(perm), session.WithFilePermissions(perm))` — the store.
+- `memory.Open(path, memory.WithFolderPermissions(perm), memory.WithFilePermissions(perm))` — a single archive.
+
 ### Migrating from the JSONL layout
 
 Earlier versions of ClawEh kept the window in `<key>.jsonl` and the state in
