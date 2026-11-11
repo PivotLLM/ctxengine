@@ -99,7 +99,7 @@ func TestCompress_AgeCapRemovesOldMessages(t *testing.T) {
 	mgr.store = store
 	mgr.msgCount = len(history)
 
-	if err := mgr.doCompress(context.Background(), false); err != nil {
+	if err := mgr.doCompress(context.Background(), false, CompactionStart{}); err != nil {
 		t.Fatalf("doCompress: %v", err)
 	}
 
@@ -139,7 +139,7 @@ func TestCompress_NoAgeCapRetainsEverything(t *testing.T) {
 	mgr.store = store
 	mgr.msgCount = len(history)
 
-	err := mgr.doCompress(context.Background(), false)
+	err := mgr.doCompress(context.Background(), false, CompactionStart{})
 	if err == nil {
 		if got := len(store.GetHistoryWithSeqs("sess")); got != len(history) {
 			t.Errorf("without an age cap the whole history should be retained; got %d of %d", got, len(history))
@@ -173,7 +173,7 @@ func TestCompress_AgeCapKeepsLatestUserMessage(t *testing.T) {
 	mgr.store = store
 	mgr.msgCount = len(history)
 
-	if err := mgr.doCompress(context.Background(), false); err != nil && !errors.Is(err, ErrNothingToCompress) {
+	if err := mgr.doCompress(context.Background(), false, CompactionStart{}); err != nil && !errors.Is(err, ErrNothingToCompress) {
 		t.Fatalf("doCompress: %v", err)
 	}
 

@@ -136,7 +136,7 @@ func TestSeqAware_CoveredRangeSetFromActualSeqs(t *testing.T) {
 	))
 	mgr.msgCount = len(stored)
 
-	err := mgr.doCompress(context.Background(), false)
+	err := mgr.doCompress(context.Background(), false, CompactionStart{})
 	if err != nil {
 		t.Fatalf("doCompress returned error: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestSeqAware_PromptContainsSeqPrefixes(t *testing.T) {
 	))
 	mgr.msgCount = len(stored)
 
-	if err := mgr.doCompress(context.Background(), false); err != nil {
+	if err := mgr.doCompress(context.Background(), false, CompactionStart{}); err != nil {
 		t.Fatalf("doCompress returned error: %v", err)
 	}
 
@@ -383,7 +383,7 @@ func TestSeqAware_ExistingSummaryCoverageAndRefsSurviveNextCompaction(t *testing
 	))
 	mgr.msgCount = len(stored)
 
-	if err := mgr.doCompress(context.Background(), false); err != nil {
+	if err := mgr.doCompress(context.Background(), false, CompactionStart{}); err != nil {
 		t.Fatalf("doCompress returned error: %v", err)
 	}
 

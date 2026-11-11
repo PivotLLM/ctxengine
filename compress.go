@@ -44,7 +44,13 @@ var ErrNoModel = errors.New("no summarization model available")
 // It summarizes the oldest messages into a structured Summary, retains a tail
 // of recent messages, and persists the result. safetyNet=true enables fallback
 // behavior (drop oldest groups) when the model produces no usable summary.
-func (m *Manager) doCompress(ctx context.Context, safetyNet bool) error {
+// start says why the pass runs; it is handed to the compaction-start callback
+// just before the first model call (SessionKey is filled in here).
+func (m *Manager) doCompress(ctx context.Context, safetyNet bool, start CompactionStart) error {
+	// Any pass settles a deferred age compaction: CompactIfDue re-checks the age
+	// condition anyway, so a pass that did not get the window under the age
+	// leaves it to the next turn's check to mark due again.
+	m.ageCompactionDue = false
 	if m.cfg.notifyCallback != nil {
 		m.cfg.notifyCallback("compression started")
 	}
@@ -185,6 +191,10 @@ func (m *Manager) doCompress(ctx context.Context, safetyNet bool) error {
 			break // tail covers everything; nothing left to summarize
 		}
 
+		if !attemptedLLM && m.cfg.compactionStart != nil {
+			start.SessionKey = m.sessionKey
+			m.cfg.compactionStart(ctx, start)
+		}
 		attemptedLLM = true
 		newSummary, ok := m.callModel(ctx, latestSummary, toSummarize, archiveMin, archiveMax, aggressive, compressionProfile, summaryTokenLimit, rec)
 		if !ok {

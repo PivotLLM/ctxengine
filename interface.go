@@ -102,14 +102,15 @@ func (a Assembly) Changed() bool { return len(a.Evictions) > 0 || a.Compacted }
 // operations, so a session can be driven from more than one goroutine (a turn
 // in flight and a session tool arriving over another transport, say). A
 // compaction holds that serialisation for the length of its model call, and
-// the host services it calls out to (the model caller, the notify and
-// reporter callbacks) must not call back into the same manager.
+// the host services it calls out to (the model caller, the notify, reporter
+// and compaction-start callbacks) must not call back into the same manager.
 type ContextManager interface { //nolint:interfacebloat // the engine's public API; splitting it is a breaking change
 	// AddUserMessage appends a user message and runs the turn-boundary
-	// compaction check.
+	// compaction check. An age-only trigger is deferred to CompactIfDue.
 	AddUserMessage(ctx context.Context, msg spawnllm.Message) (int64, error)
 	// AddAssistantMessage appends an assistant message and runs the
-	// turn-boundary compaction check.
+	// turn-boundary compaction check. An age-only trigger is deferred to
+	// CompactIfDue.
 	AddAssistantMessage(ctx context.Context, msg spawnllm.Message) (int64, error)
 	// AddToolCallMessage records the assistant turn containing tool calls.
 	// No compaction check: that is deferred to the next Assemble.
@@ -129,6 +130,11 @@ type ContextManager interface { //nolint:interfacebloat // the engine's public A
 
 	// Compact triggers a normal LLM-based compression pass on demand.
 	Compact(ctx context.Context) error
+	// CompactIfDue runs the age-triggered compaction an add deferred, if it is
+	// still due, and reports whether a pass ran. The age trigger never makes
+	// AddUserMessage or AddAssistantMessage wait on the summary model; call
+	// this once the turn's reply has been sent. A no-op when nothing is due.
+	CompactIfDue(ctx context.Context) (bool, error)
 	// LastCompactionReport returns the report from the most recent pass, or nil.
 	LastCompactionReport() *CompactionReport
 	// RenderedSummary returns the current session summary as Markdown, or "".

@@ -80,7 +80,7 @@ func TestCompactionState_PersistedAndRestoredOnRestart(t *testing.T) {
 	mgr1.msgCount = len(history)
 
 	// Run compression to produce persisted state.
-	if err := mgr1.doCompress(context.Background(), false); err != nil {
+	if err := mgr1.doCompress(context.Background(), false, CompactionStart{}); err != nil {
 		t.Fatalf("doCompress returned error: %v", err)
 	}
 
@@ -195,7 +195,7 @@ func TestCompactionState_WrittenAfterPersistResult(t *testing.T) {
 	))
 	mgr.msgCount = len(history)
 
-	if err := mgr.doCompress(context.Background(), false); err != nil {
+	if err := mgr.doCompress(context.Background(), false, CompactionStart{}); err != nil {
 		t.Fatalf("doCompress: %v", err)
 	}
 

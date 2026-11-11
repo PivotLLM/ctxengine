@@ -202,7 +202,7 @@ func assertLastUserAssembled(t *testing.T, mgr *Manager, want string) {
 
 // TestAddUserMessage_AgeCompactionKeepsTheNewCronFire reproduces the incident:
 // a fire of a scheduled job added while the age trigger is due must survive
-// the compaction that the add runs, and be the request the model is sent.
+// the compaction that follows the add, and be the request the model is sent.
 // Before the fix, every later fire of the job was collapsed as a duplicate of
 // an earlier one with replies in between, the new fire with them, and the
 // keep-newest-user clamp missed it because it compared indexes into the
@@ -221,6 +221,12 @@ func TestAddUserMessage_AgeCompactionKeepsTheNewCronFire(t *testing.T) {
 	}
 	if seq != 546 {
 		t.Fatalf("seq = %d, want 546", seq)
+	}
+	if len(caller.requests) != 0 {
+		t.Fatal("the age trigger compacted inside AddUserMessage; it must be deferred")
+	}
+	if ran, err := mgr.CompactIfDue(ctx); err != nil || !ran {
+		t.Fatalf("CompactIfDue = %v, %v; want a pass", ran, err)
 	}
 	if len(caller.requests) == 0 {
 		t.Fatal("the age trigger did not run a compaction")
@@ -278,6 +284,9 @@ func TestAddUserMessage_AnsweredRunFoldsAndKeepsTheNewFire(t *testing.T) {
 	if _, err := mgr.AddUserMessage(context.Background(), fire); err != nil {
 		t.Fatalf("AddUserMessage: %v", err)
 	}
+	if ran, err := mgr.CompactIfDue(context.Background()); err != nil || !ran {
+		t.Fatalf("CompactIfDue = %v, %v; want a pass", ran, err)
+	}
 
 	if len(store.window) != 2 {
 		t.Fatalf("window = %+v, want the run's anchor and the new fire", storedToPlain(store.window))
@@ -315,7 +324,7 @@ func TestCompress_CollapsedRepeatsAreNotSummarized(t *testing.T) {
 	}
 	mgr.msgCount = len(history)
 
-	if err := mgr.doCompress(context.Background(), false); err != nil {
+	if err := mgr.doCompress(context.Background(), false, CompactionStart{}); err != nil {
 		t.Fatalf("doCompress: %v", err)
 	}
 
