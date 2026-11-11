@@ -25,7 +25,7 @@ func failingLLM(n int) *mockLLM {
 func tripBreaker(t *testing.T, mgr *Manager) {
 	t.Helper()
 	for range defaultMaxConsecutiveCompactFailures {
-		if err := mgr.compress(context.Background(), false); err == nil {
+		if err := mgr.compress(context.Background(), false, CompactionStart{}); err == nil {
 			t.Fatal("compress against a failing model returned nil")
 		}
 	}
@@ -79,7 +79,7 @@ func TestBreaker_NormalPathStillSuppressed(t *testing.T) {
 
 	tripBreaker(t, mgr)
 	callsBefore := llm.callCount
-	if err := mgr.compress(context.Background(), false); err != nil {
+	if err := mgr.compress(context.Background(), false, CompactionStart{}); err != nil {
 		t.Fatalf("suppressed compress returned %v", err)
 	}
 	if llm.callCount != callsBefore {
@@ -104,14 +104,14 @@ func TestBreaker_TrippedHookFires(t *testing.T) {
 	mgr.msgCount = len(store.history)
 
 	for range defaultMaxConsecutiveCompactFailures - 1 {
-		if err := mgr.compress(context.Background(), false); err == nil {
+		if err := mgr.compress(context.Background(), false, CompactionStart{}); err == nil {
 			t.Fatal("compress against a failing model returned nil")
 		}
 	}
 	if len(trips) != 0 {
 		t.Fatalf("hook fired before the threshold: %+v", trips)
 	}
-	if err := mgr.compress(context.Background(), false); err == nil {
+	if err := mgr.compress(context.Background(), false, CompactionStart{}); err == nil {
 		t.Fatal("compress against a failing model returned nil")
 	}
 	if len(trips) != 1 {
@@ -122,7 +122,7 @@ func TestBreaker_TrippedHookFires(t *testing.T) {
 	}
 
 	// Further suppressed attempts do not re-fire the hook.
-	noErr(t, mgr.compress(context.Background(), false))
+	noErr(t, mgr.compress(context.Background(), false, CompactionStart{}))
 	if len(trips) != 1 {
 		t.Errorf("hook re-fired while already tripped: %d calls", len(trips))
 	}

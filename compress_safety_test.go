@@ -74,7 +74,7 @@ func TestItem1_LargeMsgRemovedBeforePersist(t *testing.T) {
 	)
 	mgr.msgCount = len(store.history)
 
-	err := mgr.doCompress(context.Background(), true)
+	err := mgr.doCompress(context.Background(), true, CompactionStart{})
 	// May return nil, ErrCompressionPartial, or ErrCompressionFailed — any is
 	// acceptable as long as the persisted history does not contain the huge message.
 	_ = err
@@ -109,7 +109,7 @@ func TestItem1_PersistResultReturnsErrorOnSaveFailure(t *testing.T) {
 	mgr.store = store
 	mgr.msgCount = len(store.history)
 
-	err := mgr.doCompress(context.Background(), false)
+	err := mgr.doCompress(context.Background(), false, CompactionStart{})
 	if !errors.Is(err, ErrCompressionFailed) {
 		t.Fatalf("expected ErrCompressionFailed when Save() fails; got %v", err)
 	}

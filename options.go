@@ -6,6 +6,7 @@
 package ctxengine
 
 import (
+	"context"
 	"os"
 
 	"github.com/PivotLLM/ctxengine/memory"
@@ -181,6 +182,9 @@ type managerConfig struct {
 	// breakerTrippedHook, when set, is invoked once each time the compaction
 	// failure circuit breaker trips for this session.
 	breakerTrippedHook func(sessionKey string, failures int)
+	// compactionStart, when set, is invoked once per compaction pass just
+	// before its first summarization-model call.
+	compactionStart func(ctx context.Context, info CompactionStart)
 	// compactDebug enables verbatim request/response capture of each
 	// summarization LLM invocation to <compressionProfileDir>/compact.jsonl.
 	compactDebug bool
@@ -427,6 +431,18 @@ func WithCompactionReporter(fn func(channel, chatID, text string)) Option {
 // manager's lock and must not call back into the same manager.
 func WithBreakerTrippedHook(fn func(sessionKey string, failures int)) Option {
 	return func(c *managerConfig) { c.breakerTrippedHook = fn }
+}
+
+// WithCompactionStartFunc sets a callback invoked once per compaction pass,
+// just before the pass's first summarization-model call, with the ctx of the
+// call that started the pass, so the host can tell the waiting conversation.
+// A pass that needs no model call (nothing to summarize, no model configured,
+// ForceCompress's drop-only path) or that the circuit breaker suppresses does
+// not invoke it; neither does a pass short-circuited by the test compress hook.
+// The callback runs synchronously under the manager's lock: it must return
+// promptly and must not call back into the same manager.
+func WithCompactionStartFunc(fn func(ctx context.Context, info CompactionStart)) Option {
+	return func(c *managerConfig) { c.compactionStart = fn }
 }
 
 // WithCompactDebug enables verbatim capture of each summarization request and

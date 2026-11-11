@@ -69,6 +69,14 @@ type Manager struct {
 	// trigger another pass against the same boundary, and the next, and the next.
 	ageTriggerFloor time.Time
 
+	// ageCompactionDue is set when the age trigger fired at a turn boundary and
+	// nothing else called for a pass there. Compacting for age alone inside
+	// AddUserMessage or AddAssistantMessage would make the reply wait on a
+	// summary-model call while the context is nowhere near full, so the pass is
+	// deferred to CompactIfDue, which the host calls once the reply is out.
+	// Cleared by any compaction pass and by Reset.
+	ageCompactionDue bool
+
 	// caller is the host's summarization model; nil disables compaction.
 	caller ModelCaller
 
@@ -401,7 +409,7 @@ func (m *Manager) emergencyCompactOnHistory(ctx context.Context) bool {
 	if m.contextPercent(history) < float64(m.cfg.safetyPercent) {
 		return false
 	}
-	if err := m.compress(ctx, true); err != nil && !errors.Is(err, ErrNothingToCompress) {
+	if err := m.compress(ctx, true, CompactionStart{Reason: CompactionReasonSafetyNet, Blocking: true}); err != nil && !errors.Is(err, ErrNothingToCompress) {
 		logger.WarnCF("llmcontext", "pre-build safety compaction failed (continuing)", map[string]any{
 			"session_key": m.sessionKey,
 			"error":       err.Error(),
@@ -424,7 +432,7 @@ func (m *Manager) emergencyCompactOnBuilt(ctx context.Context, built []spawnllm.
 	if float64(tokens)*100.0/float64(m.cfg.contextWindow) < float64(m.cfg.safetyPercent) {
 		return false
 	}
-	if err := m.compress(ctx, true); err != nil && !errors.Is(err, ErrNothingToCompress) {
+	if err := m.compress(ctx, true, CompactionStart{Reason: CompactionReasonSafetyNet, Blocking: true}); err != nil && !errors.Is(err, ErrNothingToCompress) {
 		logger.WarnCF("llmcontext", "post-build safety compaction failed (continuing)", map[string]any{
 			"session_key": m.sessionKey,
 			"error":       err.Error(),
@@ -879,7 +887,8 @@ func (m *Manager) archiveWindow() (minSeq, maxSeq int64) {
 // compress logs the compression trigger and dispatches to the LLM-based
 // compressor. If compressHook is set (tests only), the hook short-circuits
 // before doCompress so trigger tests remain independent of LLM behavior.
-func (m *Manager) compress(ctx context.Context, safetyNet bool) error {
+// start says why the pass runs; see doCompress.
+func (m *Manager) compress(ctx context.Context, safetyNet bool, start CompactionStart) error {
 	// Failure circuit breaker: after repeated automatic-compaction failures,
 	// suppress the normal-trigger path until enough new messages accumulate. A
 	// manual /compact (Compact) and the 413-recovery path (ForceCompress) bypass
@@ -904,6 +913,7 @@ func (m *Manager) compress(ctx context.Context, safetyNet bool) error {
 	logger.InfoCF("llmcontext", "compression triggered", map[string]any{
 		"session_key":     m.sessionKey,
 		"safety_net":      safetyNet,
+		"reason":          string(start.Reason),
 		"context_pct":     m.contextPercent(history),
 		"history_tokens":  m.estTokens(history),
 		"overhead_tokens": m.nonHistoryTokens(),
@@ -911,10 +921,11 @@ func (m *Manager) compress(ctx context.Context, safetyNet bool) error {
 	})
 	if m.compressHook != nil {
 		m.compressedAtCount = m.msgCount
+		m.ageCompactionDue = false
 		m.compressHook(safetyNet)
 		return nil
 	}
-	err := m.doCompress(ctx, safetyNet)
+	err := m.doCompress(ctx, safetyNet, start)
 	m.recordCompactionOutcome(err)
 	// Deliver the report for the automatic path. The manual /compact path returns
 	// the report to the caller instead and leaves reportCallback unset here.
@@ -967,7 +978,9 @@ func (m *Manager) recordCompactionOutcome(err error) {
 }
 
 // triggerCheck runs the unified compression trigger. Called at the end of
-// AddUserMessage and AddAssistantMessage.
+// AddUserMessage and AddAssistantMessage, both of which a turn waits on, so
+// every pass it starts is a blocking one — except that the age trigger alone
+// never compacts here: it only marks the pass due for CompactIfDue.
 func (m *Manager) triggerCheck(ctx context.Context) error {
 	if m.cfg.contextWindow <= 0 {
 		return nil
@@ -981,7 +994,7 @@ func (m *Manager) triggerCheck(ctx context.Context) error {
 
 	// Safety net overrides everything, floor included.
 	if contextPct >= float64(m.cfg.safetyPercent) {
-		return m.compress(ctx, true)
+		return m.compress(ctx, true, CompactionStart{Reason: CompactionReasonSafetyNet, Blocking: true})
 	}
 
 	// Age trigger: fires regardless of how little of the window the history
@@ -989,20 +1002,39 @@ func (m *Manager) triggerCheck(ctx context.Context) error {
 	// only trigger that reaches a low-volume session — one that never approaches
 	// any percentage threshold and whose message count creeps up too slowly to
 	// matter will otherwise keep weeks-old messages in the window indefinitely.
-	if m.ageTriggered(stored) {
+	// It does not compact here unless another trigger also calls for a pass;
+	// on its own it is deferred to CompactIfDue.
+	ageFired := m.ageTriggered(stored)
+	reason := m.turnBoundaryReason(contextPct)
+	if ageFired {
 		logger.InfoCF("llmcontext", "compaction age trigger fired", map[string]any{
 			"session_key":  m.sessionKey,
 			"trigger_days": m.cfg.triggerDays,
 			"context_pct":  contextPct,
+			"deferred":     reason == "",
 		})
-		err := m.compress(ctx, false)
-		m.noteAgeTriggerBoundary()
-		return err
+		if reason == "" {
+			m.ageCompactionDue = true
+			return nil
+		}
 	}
+	if reason == "" {
+		return nil
+	}
+	err := m.compress(ctx, false, CompactionStart{Reason: reason, Blocking: true})
+	if ageFired {
+		m.noteAgeTriggerBoundary()
+	}
+	return err
+}
 
+// turnBoundaryReason evaluates the percentage and count triggers below the
+// safety net: the floor, the cooldown, then the normal percentage and the
+// message count. Returns the reason for a pass, or "" when none is due.
+func (m *Manager) turnBoundaryReason(contextPct float64) CompactionReason {
 	// Floor: no compression regardless of the remaining triggers.
 	if contextPct < float64(m.cfg.minPercent) {
-		return nil
+		return ""
 	}
 
 	// Cooldown suppresses normal and count triggers.
@@ -1012,15 +1044,52 @@ func (m *Manager) triggerCheck(ctx context.Context) error {
 			m.cooling = false
 		}
 	}
-
-	countTriggered := m.cfg.messageThreshold > 0 &&
-		(m.msgCount-m.compressedAtCount) >= m.cfg.messageThreshold
-
-	if (contextPct >= float64(m.cfg.normalPercent) || countTriggered) && !m.cooling {
-		return m.compress(ctx, false)
+	if m.cooling {
+		return ""
 	}
+	if contextPct >= float64(m.cfg.normalPercent) {
+		return CompactionReasonThreshold
+	}
+	if m.cfg.messageThreshold > 0 && (m.msgCount-m.compressedAtCount) >= m.cfg.messageThreshold {
+		return CompactionReasonCount
+	}
+	return ""
+}
 
-	return nil
+// CompactIfDue runs the age-triggered compaction that AddUserMessage or
+// AddAssistantMessage deferred, if one is still due: it re-checks the age
+// condition first, so a pass that ran in the meantime or a window that has
+// moved makes it a no-op. The host calls it after a turn's reply is sent.
+// Like the other automatic passes it is subject to the failure circuit
+// breaker. Returns whether a pass ran.
+func (m *Manager) CompactIfDue(ctx context.Context) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !m.ageCompactionDue {
+		return false, nil
+	}
+	if m.cfg.contextWindow <= 0 || !m.ageTriggered(m.store.GetHistoryWithSeqs(m.sessionKey)) {
+		m.ageCompactionDue = false
+		return false, nil
+	}
+	if m.autoCompactionSuppressed() {
+		// The breaker is not a reason to forget the age: it resumes after enough
+		// new messages, and the next call after that runs the pass.
+		logger.InfoCF("llmcontext", "deferred age compaction suppressed by circuit breaker", map[string]any{
+			"session_key":          m.sessionKey,
+			"consecutive_failures": m.consecutiveCompactFailures,
+			"resume_at_msg_count":  m.breakerTrippedUntilCount,
+		})
+		return false, nil
+	}
+	logger.InfoCF("llmcontext", "running deferred age compaction", map[string]any{
+		"session_key":  m.sessionKey,
+		"trigger_days": m.cfg.triggerDays,
+	})
+	err := m.compress(ctx, false, CompactionStart{Reason: CompactionReasonAge})
+	m.noteAgeTriggerBoundary()
+	return true, err
 }
 
 // ageTriggered reports whether the oldest live message has passed triggerDays.
@@ -1232,7 +1301,7 @@ func (m *Manager) Compact(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	err := m.doCompress(ctx, false)
+	err := m.doCompress(ctx, false, CompactionStart{Reason: CompactionReasonManual})
 	m.recordCompactionOutcome(err)
 	return err
 }
@@ -1294,7 +1363,7 @@ func (m *Manager) ForceCompress(ctx context.Context) error {
 
 	before := len(conv)
 	if m.caller != nil {
-		err := m.doCompress(ctx, true)
+		err := m.doCompress(ctx, true, CompactionStart{Reason: CompactionReasonOverflow, Blocking: true})
 		m.recordCompactionOutcome(err)
 		if err != nil && !errors.Is(err, ErrCompressionPartial) {
 			return fmt.Errorf("force compress: %w", err)
@@ -1414,6 +1483,7 @@ func (m *Manager) Reset(ctx context.Context) error {
 	m.coolingSinceCount = 0
 	m.lastCompressedAt = time.Time{}
 	m.lastCompressionGain = 0
+	m.ageCompactionDue = false
 
 	// 2. Clear the pending-turn flag so no stale flag survives the reset.
 	if err := m.store.ClearPendingTurn(m.sessionKey); err != nil {

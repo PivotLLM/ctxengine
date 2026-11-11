@@ -119,6 +119,8 @@ own: the archive imports it into `summaries` the first time it is opened.
 - Call `AddUserMessage`/`AddAssistantMessage`/`AddToolCallMessage`/
   `AddToolResult` as the conversation happens, and `Assemble` before every
   model call.
+- Call `CompactIfDue` once a turn's reply has been sent: the age trigger
+  never makes an add wait on the summary model, it defers the pass to this.
 - Give the tools a `Host` (sessions directory and the compact, clear and
   info closures) if the model should be able to reach the archive.
 

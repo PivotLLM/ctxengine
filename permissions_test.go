@@ -108,7 +108,7 @@ func TestCompactionDebugCapture_Permissions(t *testing.T) {
 			mgr := newCompressManager(t, store, []*mockLLM{llm}, opts...)
 			mgr.msgCount = len(store.history)
 
-			if err := mgr.doCompress(context.Background(), false); err != nil {
+			if err := mgr.doCompress(context.Background(), false, CompactionStart{}); err != nil {
 				t.Fatalf("doCompress: %v", err)
 			}
 			if got := permOf(t, path); got != tt.want {

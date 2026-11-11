@@ -48,7 +48,7 @@ func TestCompactionReport_Content(t *testing.T) {
 	mgr := newCompressManager(t, store, []*mockLLM{rejecting, valid})
 	mgr.msgCount = len(store.history)
 
-	if err := mgr.doCompress(context.Background(), false); err != nil {
+	if err := mgr.doCompress(context.Background(), false, CompactionStart{}); err != nil {
 		t.Fatalf("doCompress error: %v", err)
 	}
 	rep := mgr.LastCompactionReport()
@@ -88,7 +88,7 @@ func TestCompactionReport_DebugCapture(t *testing.T) {
 	)
 	mgr.msgCount = len(store.history)
 
-	if err := mgr.doCompress(context.Background(), false); err != nil {
+	if err := mgr.doCompress(context.Background(), false, CompactionStart{}); err != nil {
 		t.Fatalf("doCompress error: %v", err)
 	}
 
@@ -149,7 +149,7 @@ func TestCompress_ValidationFallback(t *testing.T) {
 	mgr := newCompressManager(t, store, []*mockLLM{rejecting, valid})
 	mgr.msgCount = len(store.history)
 
-	err := mgr.doCompress(context.Background(), false)
+	err := mgr.doCompress(context.Background(), false, CompactionStart{})
 	if err != nil {
 		t.Fatalf("doCompress returned error: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestCompress_NothingToCompress(t *testing.T) {
 	mgr := newCompressManager(t, store, []*mockLLM{llm})
 	mgr.msgCount = len(store.history)
 
-	err := mgr.doCompress(context.Background(), false)
+	err := mgr.doCompress(context.Background(), false, CompactionStart{})
 	if !errors.Is(err, ErrNothingToCompress) {
 		t.Fatalf("expected ErrNothingToCompress; got %v", err)
 	}
@@ -202,7 +202,7 @@ func TestCompress_AllRejected_Failed(t *testing.T) {
 	mgr := newCompressManager(t, store, []*mockLLM{rejecting})
 	mgr.msgCount = len(store.history)
 
-	err := mgr.doCompress(context.Background(), false)
+	err := mgr.doCompress(context.Background(), false, CompactionStart{})
 	if !errors.Is(err, ErrCompressionFailed) {
 		t.Fatalf("expected ErrCompressionFailed; got %v", err)
 	}
@@ -274,7 +274,7 @@ func TestBreaker_SuppressesAutoPath(t *testing.T) {
 
 	// Trip the breaker with consecutive automatic-compaction failures.
 	for range defaultMaxConsecutiveCompactFailures {
-		if err := mgr.compress(context.Background(), false); err == nil {
+		if err := mgr.compress(context.Background(), false, CompactionStart{}); err == nil {
 			t.Fatal("compress against a failing model returned nil")
 		}
 	}
@@ -284,7 +284,7 @@ func TestBreaker_SuppressesAutoPath(t *testing.T) {
 
 	callsBefore := failing.callCount
 	// A further automatic attempt must be suppressed (no new LLM calls).
-	noErr(t, mgr.compress(context.Background(), false))
+	noErr(t, mgr.compress(context.Background(), false, CompactionStart{}))
 	if failing.callCount != callsBefore {
 		t.Errorf("expected auto path suppressed; LLM called %d more times", failing.callCount-callsBefore)
 	}

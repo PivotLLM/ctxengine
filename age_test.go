@@ -68,6 +68,12 @@ func TestTrigger_AgeFiresBelowFloor(t *testing.T) {
 	if _, err := mgr.AddUserMessage(context.Background(), msgWithContent("hi")); err != nil {
 		t.Fatalf("AddUserMessage: %v", err)
 	}
+	if called {
+		t.Fatal("the age trigger alone must not compact inside AddUserMessage")
+	}
+	if ran, err := mgr.CompactIfDue(context.Background()); err != nil || !ran {
+		t.Fatalf("CompactIfDue = %v, %v; want a pass", ran, err)
+	}
 
 	if !called {
 		t.Fatal("age trigger must fire below the percentage floor")
@@ -256,6 +262,9 @@ func TestTrigger_AgeDoesNotRefireAgainstTheSameBoundary(t *testing.T) {
 		if _, err := mgr.AddUserMessage(context.Background(), msgWithContent("hi")); err != nil {
 			t.Fatalf("message %d: %v", i, err)
 		}
+		if _, err := mgr.CompactIfDue(context.Background()); err != nil {
+			t.Fatalf("CompactIfDue after message %d: %v", i, err)
+		}
 	}
 
 	if calls != 1 {
@@ -282,6 +291,9 @@ func TestTrigger_AgeFiresAgainOnceTheWindowMovesPast(t *testing.T) {
 	if _, err := mgr.AddUserMessage(context.Background(), msgWithContent("hi")); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := mgr.CompactIfDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if calls != 1 {
 		t.Fatalf("first pass did not fire: calls=%d", calls)
 	}
@@ -293,6 +305,9 @@ func TestTrigger_AgeFiresAgainOnceTheWindowMovesPast(t *testing.T) {
 	store.ages[0] = 20 * 24 * time.Hour
 
 	if _, err := mgr.AddUserMessage(context.Background(), msgWithContent("hi")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.CompactIfDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 {
@@ -320,6 +335,9 @@ func TestTrigger_AgeSuppressionClearsWhenTheWindowComesBack(t *testing.T) {
 	store.ages[0] = 30 * 24 * time.Hour
 	if _, err := mgr.AddUserMessage(context.Background(), msgWithContent("hi")); err != nil {
 		t.Fatal(err)
+	}
+	if ran, err := mgr.CompactIfDue(context.Background()); err != nil || !ran {
+		t.Fatalf("CompactIfDue = %v, %v; want a pass", ran, err)
 	}
 	if !mgr.ageTriggerFloor.IsZero() {
 		t.Errorf("floor = %v, want cleared once the window is inside the trigger age", mgr.ageTriggerFloor)

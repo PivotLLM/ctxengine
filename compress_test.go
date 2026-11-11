@@ -176,7 +176,7 @@ func TestCompress_PrimarySuccess(t *testing.T) {
 	mgr := newCompressManager(t, store, []*mockLLM{llm})
 	mgr.msgCount = len(store.history)
 
-	err := mgr.doCompress(context.Background(), false)
+	err := mgr.doCompress(context.Background(), false, CompactionStart{})
 	if err != nil {
 		t.Fatalf("doCompress returned error: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestCompress_RefusalDetectedAndModelSkipped(t *testing.T) {
 	mgr := newCompressManager(t, store, []*mockLLM{refuser, worker})
 	mgr.msgCount = len(store.history)
 
-	if err := mgr.doCompress(context.Background(), false); err != nil {
+	if err := mgr.doCompress(context.Background(), false, CompactionStart{}); err != nil {
 		t.Fatalf("doCompress returned error: %v", err)
 	}
 
@@ -241,7 +241,7 @@ func TestCompress_RefusalDetectedAndModelSkipped(t *testing.T) {
 	refuser.callCount = 0
 	store.history = makeConversation(10, 200)
 	mgr.msgCount = len(store.history)
-	if err := mgr.doCompress(context.Background(), false); err != nil {
+	if err := mgr.doCompress(context.Background(), false, CompactionStart{}); err != nil {
 		t.Fatalf("second doCompress returned error: %v", err)
 	}
 	if refuser.callCount != 0 {
@@ -271,7 +271,7 @@ func TestCompress_NeverEmptiesLiveWindow(t *testing.T) {
 	mgr := newCompressManager(t, store, []*mockLLM{llm})
 	mgr.msgCount = len(history)
 
-	noErr(t, mgr.doCompress(context.Background(), false))
+	noErr(t, mgr.doCompress(context.Background(), false, CompactionStart{}))
 
 	conv := 0
 	for _, m := range store.GetHistory("sess") {
@@ -303,7 +303,7 @@ func TestCompress_RetainsLastUserMessage(t *testing.T) {
 	mgr.msgCount = len(history)
 
 	// With the only user turn retained there may be nothing left to compact.
-	if err := mgr.doCompress(context.Background(), false); err != nil && !errors.Is(err, ErrNothingToCompress) {
+	if err := mgr.doCompress(context.Background(), false, CompactionStart{}); err != nil && !errors.Is(err, ErrNothingToCompress) {
 		t.Fatalf("doCompress: %v", err)
 	}
 
@@ -337,7 +337,7 @@ func TestCompress_HostErrorNeatened(t *testing.T) {
 
 	// A hard error ends the call: the loop runs one iteration per prompt type
 	// and each makes exactly one call before giving up.
-	if err := mgr.doCompress(context.Background(), false); err == nil {
+	if err := mgr.doCompress(context.Background(), false, CompactionStart{}); err == nil {
 		t.Fatal("doCompress against a failing model returned nil")
 	}
 	rep := mgr.LastCompactionReport()
@@ -375,7 +375,7 @@ func TestCompress_HostNoModelReportsSkipped(t *testing.T) {
 	mgr := newCompressManager(t, store, nil, WithModelCaller(host))
 	mgr.msgCount = len(store.history)
 
-	err := mgr.doCompress(context.Background(), false)
+	err := mgr.doCompress(context.Background(), false, CompactionStart{})
 	if !errors.Is(err, ErrCompressionFailed) {
 		t.Fatalf("expected ErrCompressionFailed; got %v", err)
 	}
@@ -410,7 +410,7 @@ func TestCompress_ExcludeGrowsWithinOneCall(t *testing.T) {
 	mgr := newCompressManager(t, store, nil, WithModelCaller(stubborn))
 	mgr.msgCount = len(store.history)
 
-	if err := mgr.doCompress(context.Background(), false); err == nil {
+	if err := mgr.doCompress(context.Background(), false, CompactionStart{}); err == nil {
 		t.Fatal("doCompress with only invalid summaries returned nil")
 	}
 
@@ -455,7 +455,7 @@ func TestCompress_FallbackSuccess(t *testing.T) {
 	mgr := newCompressManager(t, store, []*mockLLM{primary, fallback})
 	mgr.msgCount = len(store.history)
 
-	err := mgr.doCompress(context.Background(), false)
+	err := mgr.doCompress(context.Background(), false, CompactionStart{})
 	if err != nil {
 		t.Fatalf("doCompress returned error: %v", err)
 	}
@@ -491,7 +491,7 @@ func TestCompress_AllFail_Normal(t *testing.T) {
 	mgr := newCompressManager(t, store, []*mockLLM{llm})
 	mgr.msgCount = len(store.history)
 
-	err := mgr.doCompress(context.Background(), false)
+	err := mgr.doCompress(context.Background(), false, CompactionStart{})
 	if !errors.Is(err, ErrCompressionFailed) {
 		t.Fatalf("expected ErrCompressionFailed; got %v", err)
 	}
@@ -525,7 +525,7 @@ func TestCompress_AllFail_Safety_Drop(t *testing.T) {
 	mgr.msgCount = len(store.history)
 	origLen := len(store.history)
 
-	err := mgr.doCompress(context.Background(), true)
+	err := mgr.doCompress(context.Background(), true, CompactionStart{})
 	if err != nil {
 		t.Fatalf("doCompress returned error: %v", err)
 	}
@@ -558,7 +558,7 @@ func TestCompress_StaleSummary(t *testing.T) {
 	mgr.msgCount = len(store.history)
 	origLen := len(store.history)
 
-	err := mgr.doCompress(context.Background(), true)
+	err := mgr.doCompress(context.Background(), true, CompactionStart{})
 	if err != nil {
 		t.Fatalf("doCompress returned error: %v", err)
 	}
@@ -593,7 +593,7 @@ func TestCompress_NotifyCallback(t *testing.T) {
 	)
 	mgr.msgCount = len(store.history)
 
-	err := mgr.doCompress(context.Background(), false)
+	err := mgr.doCompress(context.Background(), false, CompactionStart{})
 	if err != nil {
 		t.Fatalf("doCompress returned error: %v", err)
 	}
@@ -648,7 +648,7 @@ func TestCompress_CoolingSetOnLowGain(t *testing.T) {
 	)
 	mgr.msgCount = len(store.history)
 
-	err := mgr.doCompress(context.Background(), false)
+	err := mgr.doCompress(context.Background(), false, CompactionStart{})
 	if err != nil {
 		t.Fatalf("doCompress returned error: %v", err)
 	}
