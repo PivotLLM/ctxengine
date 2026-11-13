@@ -121,6 +121,8 @@ own: the archive imports it into `summaries` the first time it is opened.
   model call.
 - Call `CompactIfDue` once a turn's reply has been sent: the age trigger
   never makes an add wait on the summary model, it defers the pass to this.
+- Call `SetContextWindow` when the session moves to a model with another
+  context window; the next add and `Assemble` measure against it.
 - Give the tools a `Host` (sessions directory and the compact, clear and
   info closures) if the model should be able to reach the archive.
 

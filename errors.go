@@ -7,8 +7,13 @@ package ctxengine
 
 import "errors"
 
-// Sentinel errors returned by Compress(), ForceCompress(), and Compact().
+// Sentinel errors returned by Compress(), ForceCompress(), Compact() and
+// SetContextWindow().
 var (
+	// ErrInvalidContextWindow is returned by SetContextWindow for a window of
+	// zero or fewer tokens.
+	ErrInvalidContextWindow = errors.New("llmcontext: context window must be positive")
+
 	// ErrCompressionNotNeeded is returned when the session is below all
 	// compression thresholds and no action was taken.
 	ErrCompressionNotNeeded = errors.New("llmcontext: compression not needed")
