@@ -595,6 +595,44 @@ func (m *Manager) ObserveUsage(estimatedPromptTokens, actualPromptTokens int) {
 	})
 }
 
+// SetContextWindow changes the context window the manager measures against.
+// Nothing derived from the window is cached: the compaction triggers, the
+// safety net, the eviction budgets and the summary limit all read it at the
+// time of use, so the next Add and Assemble measure against the new value.
+// A smaller window that the history no longer fits is therefore handled by
+// the next Assemble's safety-net pass before the request is built, and one
+// past the normal threshold by the next AddUserMessage or AddAssistantMessage.
+//
+// The post-compaction cooldown is cleared on any change: it records that the
+// last pass could not bring the history under the normal threshold of the
+// previous window, which says nothing about the new one, and on a smaller
+// window it would hold back the normal pass the history now needs.
+//
+// A window <= 0 returns ErrInvalidContextWindow and changes nothing (0
+// disables every window-based trigger, which only WithContextWindow may
+// choose); setting the current window is a no-op.
+func (m *Manager) SetContextWindow(tokens int) error {
+	if tokens <= 0 {
+		return fmt.Errorf("%w: %d", ErrInvalidContextWindow, tokens)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	previous := m.cfg.contextWindow
+	if tokens == previous {
+		return nil
+	}
+	m.cfg.contextWindow = tokens
+	m.cooling = false
+	m.coolingSinceCount = 0
+	logger.InfoCF("llmcontext", "context window changed", map[string]any{
+		"session_key": m.sessionKey,
+		"previous":    previous,
+		"current":     tokens,
+	})
+	return nil
+}
+
 // EstimateToolDefinitionTokens estimates the token cost of a tool-schema set as
 // the provider will serialize it. Callers pass the same slice they hand to the
 // provider, so the figure tracks the real request rather than a fixed guess.

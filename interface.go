@@ -127,6 +127,11 @@ type ContextManager interface { //nolint:interfacebloat // the engine's public A
 	// built by Assemble, against that Assembly's PromptTokenEstimate, so the
 	// engine's token estimate calibrates itself to the model in use.
 	ObserveUsage(estimatedPromptTokens, actualPromptTokens int)
+	// SetContextWindow changes the context window, in tokens, that every
+	// later trigger, eviction budget and Assemble measures against, such as
+	// when the host switches the session to a model with another window. It
+	// returns ErrInvalidContextWindow for a value <= 0 and changes nothing.
+	SetContextWindow(tokens int) error
 
 	// Compact triggers a normal LLM-based compression pass on demand.
 	Compact(ctx context.Context) error
