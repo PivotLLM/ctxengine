@@ -172,8 +172,8 @@ func (r *compactionRecorder) record(model, status, detail string, dur time.Durat
 		Detail:     detail,
 		DurationMs: dur.Milliseconds(),
 	})
-	// Always log the per-model outcome (independent of debug capture) so claw.log
-	// shows which summarization model succeeded or failed for each attempt.
+	// Always log the per-model outcome (independent of debug capture) so the host's
+	// log shows which summarization model succeeded or failed for each attempt.
 	if status == "ok" {
 		logger.InfoCF("llmcontext", "compression model succeeded", map[string]any{
 			"model":       model,

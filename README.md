@@ -7,7 +7,7 @@ into a rolling summary when the window fills.
 
 It also keeps the whole conversation on disk and searchable.
 
-This engine was originally written for [ClawEh](https://github.com/PivotLLM/ClawEh)
+This engine was originally written for a host application
 and subsquently separated into it's own clearly-defined module.
 
 ## What it owns
@@ -69,7 +69,7 @@ modes:
 
 ### Migrating from the JSONL layout
 
-Earlier versions of ClawEh kept the window in `<key>.jsonl` and the state in
+Earlier host versions kept the window in `<key>.jsonl` and the state in
 `<key>.meta.json` beside the archive. `session.MigrateJSONL(dir)` folds every
 such pair into its `<key>.archive.db` and renames the sources to
 `*.jsonl.migrated` / `*.meta.json.migrated`, which can be deleted once the

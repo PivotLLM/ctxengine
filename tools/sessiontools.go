@@ -6,7 +6,7 @@
 // Package tools exposes the session history and lifecycle tools as
 // toolspec definitions with BARE names ("messages", "search", "compact",
 // "info", "summary_list", "summary_get", "clear"). A host mounts them under its
-// own namespace (ClawEh publishes "session_messages" and so on).
+// own namespace (for example "session_messages").
 //
 // The archive-backed tools (messages, search, summary_list, summary_get) read
 // the per-session archive at <Host.SessionsDir>/<key>.archive.db directly. The
@@ -31,7 +31,7 @@ import (
 
 // SessionInfo holds the structured data returned by the session_info tool.
 type SessionInfo struct {
-	Server              string           `json:"server,omitempty"` // e.g. "ClawEh 0.4.8"
+	Server              string           `json:"server,omitempty"` // e.g. "MyApp 1.2.3"
 	OS                  string           `json:"os,omitempty"`     // e.g. "linux/amd64"
 	SessionKey          string           `json:"session_key"`
 	StartedAt           *time.Time       `json:"started_at,omitempty"`

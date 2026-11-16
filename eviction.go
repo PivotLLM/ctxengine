@@ -139,7 +139,7 @@ func capResource(s string, maxBytes int) string {
 const evictionMarker = "[evicted:"
 
 // sessionMessagesTool is the name the host publishes the session history tool
-// under (the tools package exports it bare as "messages"; ClawEh mounts it as
+// under (the tools package exports it bare as "messages"; a host typically mounts it as
 // session_messages). Named in placeholders so the model knows how to get the
 // exact content back.
 const sessionMessagesTool = "session_messages"
@@ -277,7 +277,7 @@ type WriterRole struct {
 
 // EvictionRoles maps tool names to their eviction roles. Names are matched
 // after any "mcp__server__" prefix is stripped, so a host lists the bare
-// names it publishes. DefaultEvictionRoles covers the ClawEh file and web
+// names it publishes. DefaultEvictionRoles covers common file and web
 // tools; a host with other tools supplies its own with WithEvictionRoles,
 // usually starting from the defaults.
 type EvictionRoles struct {

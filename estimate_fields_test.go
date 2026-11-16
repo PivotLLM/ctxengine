@@ -45,7 +45,7 @@ func TestEstimate_CountsResponsesReasoning(t *testing.T) {
 
 // TestEstimate_IgnoresSystemPartsAndAttachments pins the two fields that must
 // NOT be counted. Attachments are archive-side metadata populated by the media
-// path and never sent to the LLM. SystemParts is no longer populated by ClawEh
+// path and never sent to the LLM. SystemParts is no longer populated by the host
 // at all — every wired adapter strips it — but the field still exists on the
 // wire type, so this guards against a future caller reintroducing it as a
 // mirror of Content and silently double-counting the system prompt.
