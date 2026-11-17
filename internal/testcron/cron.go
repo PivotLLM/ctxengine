@@ -4,7 +4,7 @@
  ******************************************************************************/
 
 // Package testcron is a test-only copy of the host's cron-message wrapper
-// format (ClawEh's cronmsg package). A host scheduler wraps a scheduled message
+// format (its cron-message package). A host scheduler wraps a scheduled message
 // in a header announcing the fire time; the engine's storage and compaction
 // layers recognise that wrapper to detect repeated fires of the same job. The
 // tests import this package as cronmsg to produce wrapped messages exactly as

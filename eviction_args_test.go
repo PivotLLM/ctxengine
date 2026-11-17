@@ -183,7 +183,7 @@ func TestSweepArgs_Idempotent(t *testing.T) {
 func TestSweepArgs_MCPToolCovered(t *testing.T) {
 	specs := make([]turnSpec, 0, 1+12)
 	specs = append(specs, turnSpec{
-		tool:    "mcp__claw__simpledoc_item_add",
+		tool:    "mcp__host__simpledoc_item_add",
 		id:      "m1",
 		args:    map[string]any{"section_id": "s1", "text": strings.Repeat("d", 20_000)},
 		content: "added",

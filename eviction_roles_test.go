@@ -107,7 +107,7 @@ func TestEvictionRoles_DefaultsUnchanged(t *testing.T) {
 		t.Errorf("default writers = %+v", d.Writers)
 	}
 	// Resolution ignores an MCP namespace prefix.
-	if res, ok := d.readerResource(normToolName("mcp__claw__web_fetch"), map[string]any{"url": "http://x"}); !ok || res != "http://x" {
+	if res, ok := d.readerResource(normToolName("mcp__host__web_fetch"), map[string]any{"url": "http://x"}); !ok || res != "http://x" {
 		t.Errorf("namespaced reader not resolved: %q %v", res, ok)
 	}
 }

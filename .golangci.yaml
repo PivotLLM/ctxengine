@@ -1,7 +1,7 @@
-# ctxengine lint configuration, adapted from ClawEh's .golangci.yaml (the house
-# config). The disabled-linter list and its reasons are the house decisions and
-# are carried over as they are; the counts quoted beside them were measured on
-# ClawEh. Settings that only made sense for ClawEh's code were dropped, and the
+# ctxengine lint configuration, adapted from the house .golangci.yaml. The
+# disabled-linter list and its reasons are the house decisions and are carried
+# over as they are; the counts quoted beside them were measured on the host
+# application. Settings that only made sense for its code were dropped, and the
 # exclusions that remain are explained against this repository's code.
 version: "2"
 
